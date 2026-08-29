@@ -4,7 +4,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-/** Ports handoff 9.2 (QuickValuePromptBuilderTests.swift, 5 cases) against the V2 dual-market prompt contract (4.3). */
+/** Ports handoff 9.2 (QuickValuePromptBuilderTests.swift) against the V3 prompt contract. */
 class QuickValuePromptBuilderTest {
 
     @Test
@@ -17,18 +17,38 @@ class QuickValuePromptBuilderTest {
     }
 
     @Test
-    fun `prompt declares schemaVersion 2 and quick_value task`() {
+    fun `prompt declares schemaVersion 3 and quick_value task`() {
         val prompt = QuickValuePromptBuilder.buildPrompt(1)
-        assertTrue(prompt.contains("\"schemaVersion\": 2"))
+        assertTrue(prompt.contains("\"schemaVersion\": 3"))
         assertTrue(prompt.contains("\"task\": \"quick_value\""))
     }
 
     @Test
-    fun `prompt requires both korea and japan sale ranges and exchange rate`() {
+    fun `prompt requires fair purchase and sale ranges for korea and japan and exchange rate`() {
         val prompt = QuickValuePromptBuilder.buildPrompt(5)
+        assertTrue(prompt.contains("koreaFairPurchaseRange"))
+        assertTrue(prompt.contains("japanFairPurchaseRange"))
         assertTrue(prompt.contains("koreaSaleRange"))
         assertTrue(prompt.contains("japanSaleRange"))
         assertTrue(prompt.contains("jpyToKrwRate"))
+    }
+
+    @Test
+    fun `prompt requires variant, rarityLevel, raritySummary, and rarityReasons`() {
+        val prompt = QuickValuePromptBuilder.buildPrompt(2)
+        assertTrue(prompt.contains("\"variant\": \"string\""))
+        assertTrue(prompt.contains("\"estimatedProductionYear\": \"string\""))
+        assertTrue(prompt.contains("\"estimatedFactory\": \"string\""))
+        assertTrue(prompt.contains("\"rarityLevel\": \"unknown | common | uncommon | rare | extremely_rare\""))
+        assertTrue(prompt.contains("\"raritySummary\": \"string\""))
+        assertTrue(prompt.contains("\"rarityReasons\": [\"string\"]"))
+    }
+
+    @Test
+    fun `prompt states evidence poor rarity is conservative and distinguishes fair purchase from sale price`() {
+        val prompt = QuickValuePromptBuilder.buildPrompt(2)
+        assertTrue(prompt.contains("적정 매입가(fairPurchaseRange)와 예상 판매가(saleRange)를 구분하여"))
+        assertTrue(prompt.contains("근거가 부족한 경우 희귀도(rarityLevel)는 보수적으로 낮게 추정하고"))
     }
 
     @Test

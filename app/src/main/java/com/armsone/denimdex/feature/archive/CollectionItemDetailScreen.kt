@@ -23,6 +23,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.armsone.denimdex.core.design.*
 import com.armsone.denimdex.core.model.CollectionItem
 import com.armsone.denimdex.core.model.SyncEligibilityState
@@ -167,10 +168,41 @@ fun CollectionItemDetailScreen(
                     .denimCard(padding = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Text(
-                    text = item.formattedValueRange,
-                    style = DenimTypography.title2.copy(color = DenimColors.charcoal)
-                )
+                if (item.hasFairPurchaseRange && item.formattedFairPurchaseRange != null) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "적정 매입가",
+                            style = DenimTypography.caption.copy(color = DenimColors.inkSoft)
+                        )
+                        Text(
+                            text = item.formattedFairPurchaseRange ?: "",
+                            style = DenimTypography.title3.copy(color = DenimColors.indigo)
+                        )
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "예상 판매가",
+                            style = DenimTypography.caption.copy(color = DenimColors.inkSoft)
+                        )
+                        Text(
+                            text = item.formattedValueRange,
+                            style = DenimTypography.title3.copy(color = DenimColors.charcoal)
+                        )
+                    }
+                } else {
+                    Text(
+                        text = item.formattedValueRange,
+                        style = DenimTypography.title2.copy(color = DenimColors.charcoal)
+                    )
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         imageVector = Icons.Default.AutoAwesome,
@@ -197,9 +229,76 @@ fun CollectionItemDetailScreen(
                 AttributeRow("브랜드", item.brandGuess.ifBlank { "확인되지 않음" })
                 AttributeRow("모델", item.modelGuess.ifBlank { "확인되지 않음" })
                 AttributeRow("추정 연대", item.eraGuess.ifBlank { "확인되지 않음" })
+                AttributeRow("추정 생산연도", item.estimatedProductionYear.ifBlank { "확인되지 않음" })
+                AttributeRow("추정 제조공장", item.estimatedFactory.ifBlank { "확인되지 않음" })
+                if (item.hasVariantInfo) {
+                    AttributeRow("세부 디테일", item.variantGuess)
+                }
                 AttributeRow("컨디션", item.condition.displayName)
                 AttributeRow("판단 신뢰도", item.confidence.displayName)
                 AttributeRow("기록일", formatDate(item.createdAt))
+            }
+
+            // Rarity section (V3-only, hidden for legacy items)
+            if (item.hasRarityInfo) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .denimCard(padding = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "희귀도 (AI 추정)",
+                            style = DenimTypography.captionBold.copy(color = DenimColors.charcoal)
+                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(item.rarityLevel.color.copy(alpha = 0.12f))
+                                .padding(horizontal = 8.dp, vertical = 3.dp)
+                        ) {
+                            Text(
+                                text = item.rarityLevel.displayName,
+                                style = DenimTypography.captionBold.copy(
+                                    color = item.rarityLevel.color,
+                                    fontSize = 12.sp
+                                )
+                            )
+                        }
+                    }
+                    if (item.raritySummary.isNotBlank()) {
+                        Text(
+                            text = item.raritySummary,
+                            style = DenimTypography.caption.copy(color = DenimColors.charcoal)
+                        )
+                    }
+                    if (item.rarityReasons.isNotEmpty()) {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            item.rarityReasons.forEach { reason ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.Top
+                                ) {
+                                    Text(
+                                        text = "·",
+                                        style = DenimTypography.captionBold.copy(color = DenimColors.brass),
+                                        modifier = Modifier.padding(end = 6.dp)
+                                    )
+                                    Text(
+                                        text = reason,
+                                        style = DenimTypography.caption.copy(color = DenimColors.inkSoft)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // Summary

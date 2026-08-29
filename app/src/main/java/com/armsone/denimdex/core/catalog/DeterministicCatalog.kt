@@ -120,20 +120,29 @@ object DeterministicCatalog {
     }
 
     /**
-     * Canonical QuickValueResult V2 matching handoff 4.2 & 9.2.
+     * Canonical QuickValueResult V3 matching iOS V3 contract.
      */
     val sampleQuickValueResult: QuickValueResult by lazy {
         QuickValueResult(
-            schemaVersion = 2,
+            schemaVersion = 3,
             task = "quick_value",
             productGuess = ProductGuess(
                 brand = "Levi's",
                 model = "501",
-                era = "1990s 판단 어려움"
+                era = "1990s 판단 어려움",
+                variant = "미국제 00501-0000 슈링크 투 핏"
             ),
             summary = "Levi's 501 레귤러 스트레이트 데님으로 추정되며 자연스러운 페이딩이 있는 상태입니다.",
             confidence = QuickValueConfidence.MEDIUM,
             condition = QuickValueCondition.FAIR,
+            rarityLevel = RarityLevel.UNCOMMON,
+            raritySummary = "90년대 미국 생산 501로 현재 유통 시장에서 점차 줄어들고 있는 준희귀 개체입니다.",
+            rarityReasons = listOf(
+                "미국 생산 종료(2003년) 이전 90년대 후기 개체",
+                "오리지널 버튼 플라이 및 원단 보존"
+            ),
+            koreaFairPurchaseRange = KoreaFairPurchaseRange(low = 60000, high = 130000),
+            japanFairPurchaseRange = JapanFairPurchaseRange(low = 6000, high = 13000),
             koreaSaleRange = KoreaSaleRange(low = 80000, high = 180000),
             japanSaleRange = JapanSaleRange(low = 8000, high = 18000),
             jpyToKrwRate = 9.1,
@@ -156,12 +165,20 @@ object DeterministicCatalog {
             ),
             rawJson = """
                 {
-                  "schemaVersion": 2,
+                  "schemaVersion": 3,
                   "task": "quick_value",
-                  "productGuess": { "brand": "Levi's", "model": "501", "era": "1990s 판단 어려움" },
+                  "productGuess": { "brand": "Levi's", "model": "501", "era": "1990s 판단 어려움", "variant": "미국제 00501-0000 슈링크 투 핏" },
                   "summary": "Levi's 501 레귤러 스트레이트 데님으로 추정되며 자연스러운 페이딩이 있는 상태입니다.",
                   "confidence": "medium",
                   "condition": "fair",
+                  "rarityLevel": "uncommon",
+                  "raritySummary": "90년대 미국 생산 501로 현재 유통 시장에서 점차 줄어들고 있는 준희귀 개체입니다.",
+                  "rarityReasons": [
+                    "미국 생산 종료(2003년) 이전 90년대 후기 개체",
+                    "오리지널 버튼 플라이 및 원단 보존"
+                  ],
+                  "koreaFairPurchaseRange": { "low": 60000, "high": 130000 },
+                  "japanFairPurchaseRange": { "low": 6000, "high": 13000 },
                   "koreaSaleRange": { "low": 80000, "high": 180000 },
                   "japanSaleRange": { "low": 8000, "high": 18000 },
                   "jpyToKrwRate": 9.1,
@@ -193,9 +210,17 @@ object DeterministicCatalog {
                 brandGuess = "Levi's",
                 modelGuess = "501",
                 eraGuess = "1990s",
+                variantGuess = "미국제 00501-0000 슈링크 투 핏",
                 summary = "Levi's 501 레귤러 스트레이트 데님으로 추정되며 자연스러운 페이딩이 있는 상태입니다.",
                 confidence = QuickValueConfidence.MEDIUM,
                 condition = QuickValueCondition.FAIR,
+                rarityLevel = RarityLevel.UNCOMMON,
+                raritySummary = "90년대 미국 생산 501로 현재 유통 시장에서 점차 줄어들고 있는 준희귀 개체입니다.",
+                rarityReasons = listOf("미국 생산 종료(2003년) 이전 90년대 후기 개체", "오리지널 버튼 플라이 및 원단 보존"),
+                koreaFairPurchaseLow = 60000,
+                koreaFairPurchaseHigh = 130000,
+                japanFairPurchaseLow = 6000,
+                japanFairPurchaseHigh = 13000,
                 koreaSaleLow = 80000,
                 koreaSaleHigh = 180000,
                 japanSaleLow = 8000,
@@ -215,9 +240,17 @@ object DeterministicCatalog {
                 brandGuess = "Lee",
                 modelGuess = "101Z",
                 eraGuess = "1970s",
+                variantGuess = "",
                 summary = "Lee 101Z 센터 레드 라벨 셀비지 데님입니다.",
                 confidence = QuickValueConfidence.HIGH,
                 condition = QuickValueCondition.GOOD,
+                rarityLevel = RarityLevel.UNKNOWN,
+                raritySummary = "",
+                rarityReasons = emptyList(),
+                koreaFairPurchaseLow = 0,
+                koreaFairPurchaseHigh = 0,
+                japanFairPurchaseLow = 0,
+                japanFairPurchaseHigh = 0,
                 koreaSaleLow = 250000,
                 koreaSaleHigh = 450000,
                 japanSaleLow = 28000,

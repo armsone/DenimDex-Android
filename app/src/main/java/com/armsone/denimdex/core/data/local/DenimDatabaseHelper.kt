@@ -8,7 +8,7 @@ class DenimDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE
 
     companion object {
         const val DATABASE_NAME = "denimdex.db"
-        const val DATABASE_VERSION = 1
+        const val DATABASE_VERSION = 2
 
         const val TABLE_ITEMS = "collection_items"
         const val COL_ID = "id"
@@ -16,9 +16,19 @@ class DenimDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE
         const val COL_BRAND_GUESS = "brand_guess"
         const val COL_MODEL_GUESS = "model_guess"
         const val COL_ERA_GUESS = "era_guess"
+        const val COL_VARIANT_GUESS = "variant_guess"
+        const val COL_ESTIMATED_PRODUCTION_YEAR = "estimated_production_year"
+        const val COL_ESTIMATED_FACTORY = "estimated_factory"
         const val COL_SUMMARY = "summary"
         const val COL_CONFIDENCE = "confidence"
         const val COL_CONDITION = "condition"
+        const val COL_RARITY_LEVEL = "rarity_level"
+        const val COL_RARITY_SUMMARY = "rarity_summary"
+        const val COL_RARITY_REASONS = "rarity_reasons"
+        const val COL_KOREA_FAIR_PURCHASE_LOW = "korea_fair_purchase_low"
+        const val COL_KOREA_FAIR_PURCHASE_HIGH = "korea_fair_purchase_high"
+        const val COL_JAPAN_FAIR_PURCHASE_LOW = "japan_fair_purchase_low"
+        const val COL_JAPAN_FAIR_PURCHASE_HIGH = "japan_fair_purchase_high"
         const val COL_KOREA_SALE_LOW = "korea_sale_low"
         const val COL_KOREA_SALE_HIGH = "korea_sale_high"
         const val COL_JAPAN_SALE_LOW = "japan_sale_low"
@@ -51,9 +61,19 @@ class DenimDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE
                 $COL_BRAND_GUESS TEXT,
                 $COL_MODEL_GUESS TEXT,
                 $COL_ERA_GUESS TEXT,
+                $COL_VARIANT_GUESS TEXT,
+                $COL_ESTIMATED_PRODUCTION_YEAR TEXT,
+                $COL_ESTIMATED_FACTORY TEXT,
                 $COL_SUMMARY TEXT,
                 $COL_CONFIDENCE TEXT,
                 $COL_CONDITION TEXT,
+                $COL_RARITY_LEVEL TEXT,
+                $COL_RARITY_SUMMARY TEXT,
+                $COL_RARITY_REASONS TEXT,
+                $COL_KOREA_FAIR_PURCHASE_LOW INTEGER,
+                $COL_KOREA_FAIR_PURCHASE_HIGH INTEGER,
+                $COL_JAPAN_FAIR_PURCHASE_LOW INTEGER,
+                $COL_JAPAN_FAIR_PURCHASE_HIGH INTEGER,
                 $COL_KOREA_SALE_LOW INTEGER,
                 $COL_KOREA_SALE_HIGH INTEGER,
                 $COL_JAPAN_SALE_LOW INTEGER,
@@ -86,6 +106,17 @@ class DenimDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // Future schema migrations
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE $TABLE_ITEMS ADD COLUMN $COL_VARIANT_GUESS TEXT")
+            db.execSQL("ALTER TABLE $TABLE_ITEMS ADD COLUMN $COL_ESTIMATED_PRODUCTION_YEAR TEXT")
+            db.execSQL("ALTER TABLE $TABLE_ITEMS ADD COLUMN $COL_ESTIMATED_FACTORY TEXT")
+            db.execSQL("ALTER TABLE $TABLE_ITEMS ADD COLUMN $COL_RARITY_LEVEL TEXT")
+            db.execSQL("ALTER TABLE $TABLE_ITEMS ADD COLUMN $COL_RARITY_SUMMARY TEXT")
+            db.execSQL("ALTER TABLE $TABLE_ITEMS ADD COLUMN $COL_RARITY_REASONS TEXT")
+            db.execSQL("ALTER TABLE $TABLE_ITEMS ADD COLUMN $COL_KOREA_FAIR_PURCHASE_LOW INTEGER DEFAULT 0")
+            db.execSQL("ALTER TABLE $TABLE_ITEMS ADD COLUMN $COL_KOREA_FAIR_PURCHASE_HIGH INTEGER DEFAULT 0")
+            db.execSQL("ALTER TABLE $TABLE_ITEMS ADD COLUMN $COL_JAPAN_FAIR_PURCHASE_LOW INTEGER DEFAULT 0")
+            db.execSQL("ALTER TABLE $TABLE_ITEMS ADD COLUMN $COL_JAPAN_FAIR_PURCHASE_HIGH INTEGER DEFAULT 0")
+        }
     }
 }

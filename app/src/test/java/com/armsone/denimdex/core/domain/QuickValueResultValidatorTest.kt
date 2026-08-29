@@ -1,5 +1,6 @@
 package com.armsone.denimdex.core.domain
 
+import com.armsone.denimdex.core.model.RarityLevel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -21,23 +22,37 @@ import org.junit.Test
 class QuickValueResultValidatorTest {
 
     private fun validJson(
-        schemaVersion: Int = 2,
+        schemaVersion: Int = 3,
         task: String = "quick_value",
         confidence: String = "medium",
+        condition: String = "fair",
+        rarityLevel: String = "uncommon",
+        variant: String = "501-0000",
+        koreaFairLow: String = "60000",
+        koreaFairHigh: String = "130000",
+        japanFairLow: String = "6000",
+        japanFairHigh: String = "13000",
         koreaLow: String = "80000",
         koreaHigh: String = "180000",
+        japanLow: String = "8000",
+        japanHigh: String = "18000",
         jpyToKrwRate: String = "9.1",
         observations: String = """[{"feature":"fly_type","value":"button_fly","evidencePhotoRole":"photo_1","certainty":"observed"}]"""
     ): String = """
         {
           "schemaVersion": $schemaVersion,
           "task": "$task",
-          "productGuess": { "brand": "Levi's", "model": "501", "era": "1990s" },
+          "productGuess": { "brand": "Levi's", "model": "501", "era": "1990s", "variant": "$variant" },
           "summary": "test summary",
           "confidence": "$confidence",
-          "condition": "fair",
+          "condition": "$condition",
+          "rarityLevel": "$rarityLevel",
+          "raritySummary": "test rarity summary",
+          "rarityReasons": ["reason 1"],
+          "koreaFairPurchaseRange": { "low": $koreaFairLow, "high": $koreaFairHigh },
+          "japanFairPurchaseRange": { "low": $japanFairLow, "high": $japanFairHigh },
           "koreaSaleRange": { "low": $koreaLow, "high": $koreaHigh },
-          "japanSaleRange": { "low": 8000, "high": 18000 },
+          "japanSaleRange": { "low": $japanLow, "high": $japanHigh },
           "jpyToKrwRate": $jpyToKrwRate,
           "observations": $observations,
           "valueReasons": ["reason"],
@@ -47,7 +62,7 @@ class QuickValueResultValidatorTest {
 
     @Test
     fun `schema version mismatch is rejected`() {
-        val result = QuickValueResultValidator.validate(validJson(schemaVersion = 1), listOf("photo_1"))
+        val result = QuickValueResultValidator.validate(validJson(schemaVersion = 2), listOf("photo_1"))
         assertTrue(result.exceptionOrNull() is QuickValueValidationError.SchemaVersionMismatch)
     }
 
@@ -64,15 +79,51 @@ class QuickValueResultValidatorTest {
     }
 
     @Test
-    fun `negative korea low is rejected`() {
+    fun `disallowed rarityLevel enum value is rejected`() {
+        val result = QuickValueResultValidator.validate(validJson(rarityLevel = "mythic"), listOf("photo_1"))
+        assertTrue(result.exceptionOrNull() is QuickValueValidationError.DisallowedEnumValue)
+    }
+
+    @Test
+    fun `negative korea sale low is rejected`() {
         val result = QuickValueResultValidator.validate(validJson(koreaLow = "-1"), listOf("photo_1"))
         assertTrue(result.exceptionOrNull() is QuickValueValidationError.NegativeValue)
     }
 
     @Test
-    fun `korea low greater than high is rejected`() {
+    fun `negative korea fair purchase low is rejected`() {
+        val result = QuickValueResultValidator.validate(validJson(koreaFairLow = "-1"), listOf("photo_1"))
+        assertTrue(result.exceptionOrNull() is QuickValueValidationError.NegativeValue)
+    }
+
+    @Test
+    fun `negative japan fair purchase low is rejected`() {
+        val result = QuickValueResultValidator.validate(validJson(japanFairLow = "-1"), listOf("photo_1"))
+        assertTrue(result.exceptionOrNull() is QuickValueValidationError.NegativeValue)
+    }
+
+    @Test
+    fun `korea sale low greater than high is rejected`() {
         val result = QuickValueResultValidator.validate(
             validJson(koreaLow = "200000", koreaHigh = "100000"),
+            listOf("photo_1")
+        )
+        assertTrue(result.exceptionOrNull() is QuickValueValidationError.LowGreaterThanHigh)
+    }
+
+    @Test
+    fun `korea fair purchase low greater than high is rejected`() {
+        val result = QuickValueResultValidator.validate(
+            validJson(koreaFairLow = "150000", koreaFairHigh = "50000"),
+            listOf("photo_1")
+        )
+        assertTrue(result.exceptionOrNull() is QuickValueValidationError.LowGreaterThanHigh)
+    }
+
+    @Test
+    fun `japan fair purchase low greater than high is rejected`() {
+        val result = QuickValueResultValidator.validate(
+            validJson(japanFairLow = "15000", japanFairHigh = "5000"),
             listOf("photo_1")
         )
         assertTrue(result.exceptionOrNull() is QuickValueValidationError.LowGreaterThanHigh)
@@ -104,10 +155,46 @@ class QuickValueResultValidatorTest {
 
     @Test
     fun `string prices and exchange rate are recovered via flexible normalization`() {
-        val json = validJson(koreaLow = "\"80,000원\"", jpyToKrwRate = "\"9.1\"")
+        val json = validJson(
+            koreaFairLow = "\"60,000원\"",
+            koreaLow = "\"80,000원\"",
+            jpyToKrwRate = "\"9.1\""
+        )
         val result = QuickValueResultValidator.validate(json, listOf("photo_1"))
         assertTrue(result.isSuccess)
+        assertEquals(60_000L, result.getOrThrow().koreaFairPurchaseRange.low)
         assertEquals(80_000L, result.getOrThrow().koreaSaleRange.low)
         assertEquals(9.1, result.getOrThrow().jpyToKrwRate, 0.001)
+    }
+
+    @Test
+    fun `omitted optional arrays and variant are tolerated`() {
+        val json = """
+            {
+              "schemaVersion": 3,
+              "task": "quick_value",
+              "productGuess": { "brand": "Levi's", "model": "501", "era": "1990s" },
+              "summary": "test summary",
+              "confidence": "medium",
+              "condition": "fair",
+              "rarityLevel": "common",
+              "raritySummary": "common denim",
+              "koreaFairPurchaseRange": { "low": 50000, "high": 100000 },
+              "japanFairPurchaseRange": { "low": 5000, "high": 10000 },
+              "koreaSaleRange": { "low": 80000, "high": 150000 },
+              "japanSaleRange": { "low": 8000, "high": 15000 },
+              "jpyToKrwRate": 9.1
+            }
+        """.trimIndent()
+        val result = QuickValueResultValidator.validate(json, listOf("photo_1"))
+        assertTrue(result.isSuccess)
+        val item = result.getOrThrow()
+        assertEquals(RarityLevel.COMMON, item.rarityLevel)
+        assertEquals("", item.productGuess.variant)
+        assertEquals("", item.productGuess.estimatedProductionYear)
+        assertEquals("", item.productGuess.estimatedFactory)
+        assertTrue(item.observations.isEmpty())
+        assertTrue(item.valueReasons.isEmpty())
+        assertTrue(item.caveats.isEmpty())
     }
 }

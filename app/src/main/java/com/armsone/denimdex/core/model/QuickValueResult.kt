@@ -28,6 +28,19 @@ enum class QuickValueCondition(val rawValue: String, val displayName: String) {
     }
 }
 
+enum class RarityLevel(val rawValue: String, val displayName: String, val color: Color = DenimColors.inkSoft) {
+    UNKNOWN("unknown", "판단 보류", DenimColors.inkSoft),
+    COMMON("common", "흔한 편", DenimColors.inkSoft),
+    UNCOMMON("uncommon", "약간 희소한 편", DenimColors.brass),
+    RARE("rare", "희소한 편", DenimColors.coolBlue),
+    EXTREMELY_RARE("extremely_rare", "매우 희소한 편", DenimColors.coolBlue);
+
+    companion object {
+        fun fromString(value: String): RarityLevel =
+            entries.find { it.rawValue.equals(value.trim(), ignoreCase = true) } ?: UNKNOWN
+    }
+}
+
 enum class Certainty(val rawValue: String) {
     OBSERVED("observed"),
     REPORTED("reported"),
@@ -53,7 +66,20 @@ enum class QuickValueBasis(val rawValue: String, val badgeText: String) {
 data class ProductGuess(
     val brand: String = "",
     val model: String = "",
-    val era: String = ""
+    val era: String = "",
+    val variant: String = "",
+    val estimatedProductionYear: String = "",
+    val estimatedFactory: String = ""
+)
+
+data class KoreaFairPurchaseRange(
+    val low: Long = 0L,
+    val high: Long = 0L
+)
+
+data class JapanFairPurchaseRange(
+    val low: Long = 0L,
+    val high: Long = 0L
 )
 
 data class KoreaSaleRange(
@@ -74,12 +100,17 @@ data class Observation(
 )
 
 data class QuickValueResult(
-    val schemaVersion: Int = 2,
+    val schemaVersion: Int = 3,
     val task: String = "quick_value",
     val productGuess: ProductGuess = ProductGuess(),
     val summary: String = "",
     val confidence: QuickValueConfidence = QuickValueConfidence.MEDIUM,
     val condition: QuickValueCondition = QuickValueCondition.FAIR,
+    val rarityLevel: RarityLevel = RarityLevel.UNKNOWN,
+    val raritySummary: String = "",
+    val rarityReasons: List<String> = emptyList(),
+    val koreaFairPurchaseRange: KoreaFairPurchaseRange = KoreaFairPurchaseRange(),
+    val japanFairPurchaseRange: JapanFairPurchaseRange = JapanFairPurchaseRange(),
     val koreaSaleRange: KoreaSaleRange = KoreaSaleRange(),
     val japanSaleRange: JapanSaleRange = JapanSaleRange(),
     val jpyToKrwRate: Double = 9.1,

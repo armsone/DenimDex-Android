@@ -7,7 +7,7 @@ import org.json.JSONObject
 sealed class QuickValueValidationError(message: String) : Exception(message) {
     object EmptyResult : QuickValueValidationError("AI response is empty.")
     object InvalidJson : QuickValueValidationError("Could not extract valid JSON from AI response.")
-    data class SchemaVersionMismatch(val version: Int) : QuickValueValidationError("Schema version mismatch: expected 2, got $version.")
+    data class SchemaVersionMismatch(val version: Int) : QuickValueValidationError("Schema version mismatch: expected 3, got $version.")
     data class TaskMismatch(val task: String) : QuickValueValidationError("Task mismatch: expected quick_value, got $task.")
     data class DisallowedEnumValue(val field: String, val value: String) : QuickValueValidationError("Disallowed enum value for $field: $value.")
     object NegativeValue : QuickValueValidationError("Price range cannot contain negative values.")
@@ -62,7 +62,7 @@ object QuickValueResultValidator {
     ): QuickValueResult {
         // 1. Schema version check
         val schemaVersion = json.optInt("schemaVersion", -1)
-        if (schemaVersion != 2) {
+        if (schemaVersion != 3) {
             throw QuickValueValidationError.SchemaVersionMismatch(schemaVersion)
         }
 
@@ -88,17 +88,59 @@ object QuickValueResultValidator {
         }
         val condition = QuickValueCondition.fromString(conditionRaw)
 
-        // 5. Product guess
+        // 5. Rarity level enum check
+        val rarityRaw = json.optString("rarityLevel", "unknown").trim().lowercase()
+        val validRarityValues = setOf("unknown", "common", "uncommon", "rare", "extremely_rare")
+        if (rarityRaw !in validRarityValues) {
+            throw QuickValueValidationError.DisallowedEnumValue("rarityLevel", rarityRaw)
+        }
+        val rarityLevel = RarityLevel.fromString(rarityRaw)
+
+        // 6. Product guess
         val productGuessObj = json.optJSONObject("productGuess")
         val productGuess = ProductGuess(
             brand = productGuessObj?.optString("brand", "") ?: "",
             model = productGuessObj?.optString("model", "") ?: "",
-            era = productGuessObj?.optString("era", "") ?: ""
+            era = productGuessObj?.optString("era", "") ?: "",
+            variant = productGuessObj?.optString("variant", "") ?: "",
+            estimatedProductionYear = productGuessObj?.optString("estimatedProductionYear", "") ?: "",
+            estimatedFactory = productGuessObj?.optString("estimatedFactory", "") ?: ""
         )
 
         val summary = json.optString("summary", "")
+        val raritySummary = json.optString("raritySummary", "")
 
-        // 6. Price ranges with flexible number recovery
+        val rarityReasonsArray = json.optJSONArray("rarityReasons") ?: JSONArray()
+        val rarityReasons = (0 until rarityReasonsArray.length()).mapNotNull {
+            rarityReasonsArray.optString(it).takeIf { str -> str.isNotBlank() }
+        }
+
+        // 7. Fair purchase price ranges with flexible number recovery
+        val kfpObj = json.optJSONObject("koreaFairPurchaseRange")
+        val kfpLow = parseFlexibleLong(kfpObj?.opt("low"))
+        val kfpHigh = parseFlexibleLong(kfpObj?.opt("high"))
+
+        if (kfpLow < 0L || kfpHigh < 0L) {
+            throw QuickValueValidationError.NegativeValue
+        }
+        if (kfpLow > kfpHigh) {
+            throw QuickValueValidationError.LowGreaterThanHigh
+        }
+        val koreaFairPurchaseRange = KoreaFairPurchaseRange(low = kfpLow, high = kfpHigh)
+
+        val jfpObj = json.optJSONObject("japanFairPurchaseRange")
+        val jfpLow = parseFlexibleLong(jfpObj?.opt("low"))
+        val jfpHigh = parseFlexibleLong(jfpObj?.opt("high"))
+
+        if (jfpLow < 0L || jfpHigh < 0L) {
+            throw QuickValueValidationError.NegativeValue
+        }
+        if (jfpLow > jfpHigh) {
+            throw QuickValueValidationError.LowGreaterThanHigh
+        }
+        val japanFairPurchaseRange = JapanFairPurchaseRange(low = jfpLow, high = jfpHigh)
+
+        // 8. Sale price ranges with flexible number recovery
         val koreaObj = json.optJSONObject("koreaSaleRange")
         val koreaLow = parseFlexibleLong(koreaObj?.opt("low"))
         val koreaHigh = parseFlexibleLong(koreaObj?.opt("high"))
@@ -123,13 +165,13 @@ object QuickValueResultValidator {
         }
         val japanSaleRange = JapanSaleRange(low = japanLow, high = japanHigh)
 
-        // 7. Exchange rate
+        // 9. Exchange rate
         val jpyToKrwRate = parseFlexibleDouble(json.opt("jpyToKrwRate"))
         if (jpyToKrwRate <= 0.0) {
             throw QuickValueValidationError.InvalidExchangeRate
         }
 
-        // 8. Observations & Unobserved Photo Role Verification
+        // 10. Observations & Unobserved Photo Role Verification
         val observationsArray = json.optJSONArray("observations") ?: JSONArray()
         val observations = mutableListOf<Observation>()
         val validCertaintyValues = setOf("observed", "reported", "inferred")
@@ -163,7 +205,7 @@ object QuickValueResultValidator {
             )
         }
 
-        // 9. Value reasons, caveats, nextPhotoInstruction
+        // 11. Value reasons, caveats, nextPhotoInstruction
         val valueReasonsArray = json.optJSONArray("valueReasons") ?: JSONArray()
         val valueReasons = (0 until valueReasonsArray.length()).mapNotNull {
             valueReasonsArray.optString(it).takeIf { str -> str.isNotBlank() }
@@ -183,6 +225,11 @@ object QuickValueResultValidator {
             summary = summary,
             confidence = confidence,
             condition = condition,
+            rarityLevel = rarityLevel,
+            raritySummary = raritySummary,
+            rarityReasons = rarityReasons,
+            koreaFairPurchaseRange = koreaFairPurchaseRange,
+            japanFairPurchaseRange = japanFairPurchaseRange,
             koreaSaleRange = koreaSaleRange,
             japanSaleRange = japanSaleRange,
             jpyToKrwRate = jpyToKrwRate,
