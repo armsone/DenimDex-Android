@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="indigo">#0B2940</color>
+    <color name="indigo_deep">#050D14</color>
+    <color name="indigo_bright">#1A5780</color>
+    <color name="signal_red">#E41E25</color>
+    <color name="washed_denim">#B3C9D1</color>
+    <color name="faded_denim">#E8ECEC</color>
+    <color name="canvas">#FAF9F6</color>
+    <color name="card_surface">#FFFFFF</color>
+    <color name="brass">#997340</color>
+    <color name="leather">#5C3D29</color>
+    <color name="success_green">#29704A</color>
+    <color name="warning_amber">#B37821</color>
+    <color name="charcoal">#141617</color>
+    <color name="ink_soft">#4A4D4F</color>
+    <color name="off_white">#F2F1EC</color>
+    <color name="accent_color">#24305C</color>
+</resources>

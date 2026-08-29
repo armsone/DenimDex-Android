@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">DenimDex</string>
+    <string name="tab_scan">감정</string>
+    <string name="tab_archive">아카이브</string>
+    <string name="tab_guide">가이드</string>
+    <string name="tab_settings">설정</string>
+</resources>

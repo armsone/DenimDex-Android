@@ -1,0 +1,45 @@
+{
+  "captured_at": "2026-08-29T09:26:48+0900",
+  "build": {
+    "version_name": "0.1.0",
+    "version_code": 346051,
+    "apk": "app/build/outputs/apk/debug/app-debug.apk",
+    "apk_sha256": "ab00e0b4aadce7d3b8997a61861afbf34e5faf2f54204bfc6c5f529a7abdd3d2"
+  },
+  "android": {
+    "serial": "R3KYB061JTZ",
+    "adb_endpoint": "192.168.0.142:46327",
+    "model": "SM-F968N",
+    "os": "Android 16",
+    "sdk": 36,
+    "pixels": "822x1918",
+    "density_dpi": 320,
+    "orientation": "portrait",
+    "theme": "light",
+    "captures": {
+      "scan_empty": [".parity/evidence/android_runtime/sm_f968n/post/scan_empty.png", "e844df1786f4436656785d3a98433dc6637991c69742b249c4bfe361378f4227"],
+      "scan_six": [".parity/evidence/android_runtime/sm_f968n/post/scan_six.png", "3a289f93b92ea1f0044411feac0385e2ce0bef17a816dbd12440ea80e077281f"],
+      "scan_result": [".parity/evidence/android_runtime/sm_f968n/post/scan_result.png", "4abef2f0f32eb302b9aa37f038fd2dd6c775e0847301be0f8af8352d0cb2c5db"],
+      "scan_result_details": [".parity/evidence/android_runtime/sm_f968n/post/scan_result_details.png", "4a4e7bb66435c9902599c3ed3b1a6497f404679171ed67cbf98f6def80e8ff85"],
+      "archive_empty": [".parity/evidence/android_runtime/sm_f968n/post/archive_empty.png", "2814b26d0827108e40bc94a0f28d576bd9bd3609dfc6af4d87bc5f5f10065457"],
+      "archive_list": [".parity/evidence/android_runtime/sm_f968n/post/archive_list.png", "5b05bea1359ddea24d6cac98b5f9a9a43a06bfd03c8c4bd4c6f086dbda9e22f3"],
+      "archive_detail": [".parity/evidence/android_runtime/sm_f968n/post/archive_detail.png", "c36caaea79fb7f7f08f32033a2f18cec1e76f1053498666e20d85c2430c2de0c"],
+      "guide": [".parity/evidence/android_runtime/sm_f968n/post/guide.png", "7d353bc2f8f2df5245aa3435291f4ea11ad5fcf3e373585534bcb42f54231974"],
+      "settings_logged_out": [".parity/evidence/android_runtime/sm_f968n/post/settings_logged_out.png", "7094740a01344325c66645096d3ed7fe7a37da6807f90715f9b274fca6a9cdc2"],
+      "scan_consent_dialog": [".parity/evidence/android_runtime/sm_f968n/post/scan_consent_dialog.png", "25826bf24a131db173b758e350b095d97a6853433ad47b390fdc38a89bfde0e5"],
+      "settings_clear_session_dialog": [".parity/evidence/android_runtime/sm_f968n/post/settings_clear_session_dialog.png", "597641d34cdb5d789c907da400a7e605a73e79133f4a138eef5ab0b6f414e80f"],
+      "scan_login": [".parity/evidence/android_runtime/sm_f968n/post/scan_login.png", "9a721c855cd71f5a71ebc8d723959ad3bae3ff0a00cd84dc93a2d18b25f4ee84"]
+    }
+  },
+  "ios": {
+    "simulator": "iPhone 17 Pro",
+    "udid": "132824B1-7FCD-47B8-BA57-7E120AE6F822",
+    "os": "iOS 26.5",
+    "pixels": "1206x2622",
+    "orientation": "portrait",
+    "theme": "light",
+    "captures": {
+      "scan_default": [".parity/evidence/ios_runtime/iphone_17_pro/scan_default.png", "00639888b97018717aff4299f5504ac724f0788c5376d44b9f85cee3631d1e8b"]
+    }
+  }
+}

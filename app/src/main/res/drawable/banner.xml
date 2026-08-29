@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+    <!-- Banner Background (Deep Indigo) -->
+    <path
+        android:fillColor="#0B2940"
+        android:pathData="M0,0h320v180h-320z" />
+    <path
+        android:fillColor="#050D14"
+        android:pathData="M0,0 L320,180 L0,180 Z"
+        android:alpha="0.4" />
+
+    <!-- Left Pocket & Viewfinder Symbol (Centered at ~75, 90) -->
+    <path
+        android:fillColor="#1A5780"
+        android:pathData="M55,60 L95,60 L95,94 L75,112 L55,94 Z" />
+    <path
+        android:strokeColor="#997340"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M59,74 Q67,86 75,76 Q83,86 91,74" />
+    <path
+        android:fillColor="#E41E25"
+        android:pathData="M94,66 L98,66 L98,76 L94,76 Z" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M48,60 L48,50 L58,50" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M102,60 L102,50 L92,50" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M48,106 L48,116 L58,116" />
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M102,106 L102,116 L92,116" />
+
+    <!-- Decorative Gold Divider Line -->
+    <path
+        android:strokeColor="#997340"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M130,55 L130,125" />
+
+    <!-- Right Side Logo Mark Elements / Text Path Silhouette -->
+    <!-- D -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M148,70 L160,70 C166,70 170,74 170,80 C170,86 166,90 160,90 L148,90 Z M153,75 L153,85 L159,85 C162,85 165,83 165,80 C165,77 162,75 159,75 Z" />
+    <!-- E -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M174,70 L188,70 L188,74 L179,74 L179,78 L187,78 L187,82 L179,82 L179,86 L188,86 L188,90 L174,90 Z" />
+    <!-- N -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M192,70 L197,70 L205,82 L205,70 L210,70 L210,90 L205,90 L197,78 L197,90 L192,90 Z" />
+    <!-- I -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M214,70 L219,70 L219,90 L214,90 Z" />
+    <!-- M -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M223,70 L228,70 L233,78 L238,70 L243,70 L243,90 L238,90 L238,77 L233,85 L233,85 L228,77 L228,90 L223,90 Z" />
+    <!-- D -->
+    <path
+        android:fillColor="#B3C9D1"
+        android:pathData="M248,70 L258,70 C264,70 268,74 268,80 C268,86 264,90 258,90 L248,90 Z M253,75 L253,85 L257,85 C260,85 263,83 263,80 C263,77 260,75 257,75 Z" />
+    <!-- E -->
+    <path
+        android:fillColor="#B3C9D1"
+        android:pathData="M272,70 L284,70 L284,74 L277,74 L277,78 L283,78 L283,82 L277,82 L277,86 L284,86 L284,90 L272,90 Z" />
+    <!-- X -->
+    <path
+        android:fillColor="#E41E25"
+        android:pathData="M288,70 L294,70 L298,77 L302,70 L308,70 L301,80 L308,90 L302,90 L298,83 L294,90 L288,90 L295,80 Z" />
+
+    <!-- Subtitle: PRIVATE ARCHIVE EST. 2026 -->
+    <path
+        android:fillColor="#997340"
+        android:pathData="M148,102 L290,102 L290,104 L148,104 Z" />
+</vector>
