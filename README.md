@@ -4,11 +4,11 @@ Zero-backend, on-device vintage denim identification and Korea/Japan market valu
 Android port of the canonical iOS reference. Full product/behavioral spec:
 [`docs/ios-handoff-v3.0.md`](docs/ios-handoff-v3.0.md).
 
-> **Verification status:** 33 JVM unit tests, debug APK assembly, Android lint, APK metadata,
+> **Verification status:** 72 JVM unit tests, debug and release APK assembly, Android lint, APK metadata,
 > and debug v2 signature verification pass. The APK was data-preserving installed and cold
 > launched on an SM-F968N physical phone; 12 rendered states, archive navigation, photo-picker
-> cancellation, and the signed-out ChatGPT login surface were checked. Authenticated AIBI,
-> camera import, tablet/TV, process-death, and full paired visual parity remain open. See
+> cancellation, the ChatGPT login surface, and an authenticated one-photo AIBI result were checked.
+> Camera import, tablet/TV, process-death, challenge/cancel/timeout paths, and full paired visual parity remain open. See
 > `.parity/report.md` and `.parity/ledger.json`.
 
 ## Module layout
@@ -40,7 +40,7 @@ app/src/test/java/...                    # JVM unit tests for deterministic doma
 ./gradlew lintDebug
 ```
 
-The three commands above passed together on 2026-08-29 with Gradle 9.5.0, AGP 9.3.0,
+The three commands above plus `assembleRelease` passed together on 2026-08-29 with Gradle 9.5.0, AGP 9.3.0,
 Kotlin/Compose plugin 2.3.21, compile/target SDK 37, and JDK 17. The generated APK is
 `app/build/outputs/apk/debug/app-debug.apk`.
 

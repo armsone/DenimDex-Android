@@ -1,5 +1,7 @@
 package com.armsone.denimdex.feature.settings
 
+import android.view.ViewGroup
+import android.widget.FrameLayout
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -17,6 +19,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import com.armsone.denimdex.BuildConfig
 import com.armsone.denimdex.core.aibi.LoginStatus
 import com.armsone.denimdex.core.design.*
@@ -35,6 +38,22 @@ fun SettingsScreen(
     val archiveCount by viewModel.archiveCount.collectAsState()
 
     Box(modifier = modifier.fillMaxSize()) {
+        // A real attached reference viewport is required for ChatGPT's mobile SPA to hydrate
+        // its account controls. It remains behind the opaque settings surface.
+        AndroidView(
+            factory = { ctx ->
+                FrameLayout(ctx).apply {
+                    layoutParams = ViewGroup.LayoutParams(375, 667)
+                    alpha = 0.001f
+                    isClickable = false
+                    isFocusable = false
+                    importantForAccessibility = android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                    post { viewModel.refreshLoginStatus(this) }
+                }
+            },
+            modifier = Modifier.size(width = 375.dp, height = 667.dp)
+        )
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -94,6 +113,7 @@ fun SettingsScreen(
                                 LoginStatus.CHECKING -> Icons.Default.Sync
                                 LoginStatus.LOGGED_IN -> Icons.Default.CheckCircle
                                 LoginStatus.LOGIN_REQUIRED -> Icons.Default.ErrorOutline
+                                LoginStatus.UNKNOWN -> Icons.Default.HelpOutline
                             },
                             contentDescription = null,
                             tint = loginStatus.color,
@@ -182,22 +202,11 @@ fun SettingsScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(text = "버전", style = DenimTypography.body.copy(color = DenimColors.charcoal))
+                    Text(text = "현재 버전", style = DenimTypography.body.copy(color = DenimColors.charcoal))
                     Text(
-                        text = BuildConfig.VERSION_NAME,
+                        text = "${BuildConfig.VERSION_NAME} (${BuildConfig.SOURCE_DISPLAY_BUILD})",
                         style = DenimTypography.captionBold.copy(color = DenimColors.inkSoft),
                         modifier = Modifier.testTag(DenimTestTags.SETTINGS_VERSION_VALUE)
-                    )
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(text = "빌드", style = DenimTypography.body.copy(color = DenimColors.charcoal))
-                    Text(
-                        text = BuildConfig.SOURCE_DISPLAY_BUILD.toString(),
-                        style = DenimTypography.captionBold.copy(color = DenimColors.inkSoft),
-                        modifier = Modifier.testTag(DenimTestTags.SETTINGS_BUILD_VALUE)
                     )
                 }
             }

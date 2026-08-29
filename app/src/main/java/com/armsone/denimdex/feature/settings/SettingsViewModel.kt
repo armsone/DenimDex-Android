@@ -1,6 +1,7 @@
 package com.armsone.denimdex.feature.settings
 
 import android.app.Application
+import android.view.ViewGroup
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.armsone.denimdex.core.aibi.AIBILoginStatusStore
@@ -51,6 +52,11 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     fun dismissLoginSheet() {
         _showLoginSheet.value = false
+        loginStore.checkStatus()
+    }
+
+    fun refreshLoginStatus(container: ViewGroup) {
+        loginStore.checkStatus(container)
     }
 
     fun onLoginSuccess() {
@@ -108,5 +114,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             repository.clearAllItems()
         }
+    }
+
+    override fun onCleared() {
+        loginStore.close()
+        super.onCleared()
     }
 }

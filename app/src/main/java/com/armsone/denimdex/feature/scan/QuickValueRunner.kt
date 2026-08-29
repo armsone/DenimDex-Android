@@ -17,20 +17,74 @@ sealed class QuickValueRunState {
     data class Preparing(val message: String) : QuickValueRunState()
     data class Running(
         val phase: AIBIPhase,
-        val elapsedSeconds: Double,
+        val elapsedSeconds: Double? = null,
         val statusMessage: String,
         val sentPhotoCount: Int,
-        val excludedSimilarCount: Int,
-        val excludedLimitCount: Int
+        val excludedSimilarCount: Int = 0,
+        val excludedLimitCount: Int = 0
     ) : QuickValueRunState()
     data class Success(
         val result: QuickValueResult,
         val sentPhotoCount: Int,
-        val excludedSimilarCount: Int,
-        val excludedLimitCount: Int
+        val excludedSimilarCount: Int = 0,
+        val excludedLimitCount: Int = 0
     ) : QuickValueRunState()
     data class Error(val message: String) : QuickValueRunState()
     object Timeout : QuickValueRunState()
+}
+
+sealed class CountdownStatus {
+    object NotStarted : CountdownStatus()
+    data class Active(val elapsedSeconds: Double) : CountdownStatus()
+    data class Expired(val elapsedSeconds: Double) : CountdownStatus()
+}
+
+class QuickValueCountdownTracker(
+    private val clock: () -> Long = { System.currentTimeMillis() }
+) {
+    var countdownStartTimeMs: Long? = null
+        private set
+
+    val isStarted: Boolean
+        get() = countdownStartTimeMs != null
+
+    fun onPhaseProgress(phase: AIBIPhase, nowMs: Long = clock()): CountdownStatus {
+        if (countdownStartTimeMs == null && isCountdownEligiblePhase(phase)) {
+            countdownStartTimeMs = nowMs
+        }
+
+        val start = countdownStartTimeMs
+        return if (start != null) {
+            val elapsed = (nowMs - start) / 1000.0
+            if (CountdownFormatter.isExpired(elapsed)) {
+                CountdownStatus.Expired(elapsed)
+            } else {
+                CountdownStatus.Active(elapsed)
+            }
+        } else {
+            CountdownStatus.NotStarted
+        }
+    }
+
+    fun computeCurrentElapsed(nowMs: Long = clock()): Double? {
+        val start = countdownStartTimeMs ?: return null
+        return (nowMs - start) / 1000.0
+    }
+
+    fun isExpired(nowMs: Long = clock()): Boolean {
+        val elapsed = computeCurrentElapsed(nowMs) ?: return false
+        return CountdownFormatter.isExpired(elapsed)
+    }
+
+    fun reset() {
+        countdownStartTimeMs = null
+    }
+
+    companion object {
+        fun isCountdownEligiblePhase(phase: AIBIPhase): Boolean {
+            return phase == AIBIPhase.GENERATING || phase == AIBIPhase.STABILIZING
+        }
+    }
 }
 
 class QuickValueRunner(
@@ -46,8 +100,11 @@ class QuickValueRunner(
     private var countdownJob: Job? = null
     private var taskJob: Job? = null
 
-    private var runStartTimeMs: Long = 0L
+    private val countdownTracker = QuickValueCountdownTracker()
     private var activeSentRoles: List<String> = emptyList()
+
+    val countdownStartTimeMs: Long?
+        get() = countdownTracker.countdownStartTimeMs
 
     fun run(
         sourcePhotoBytes: List<ByteArray>,
@@ -64,6 +121,7 @@ class QuickValueRunner(
         _state.value = QuickValueRunState.Preparing("사진을 선별하고 준비하고 있습니다...")
 
         taskJob = scope.launch {
+            try {
             val totalSourceCount = sourcePhotoBytes.size
             val (selectedPhotos, similarExcluded, limitExcluded) = withContext(Dispatchers.Default) {
                 // 1. Deduplicate
@@ -123,6 +181,9 @@ class QuickValueRunner(
                     val validated = QuickValueResultValidator.validate(result.cleanedText, activeSentRoles)
                     return if (validated.isSuccess) {
                         val parsed = validated.getOrThrow()
+                        countdownJob?.cancel()
+                        countdownJob = null
+                        countdownTracker.reset()
                         _state.value = QuickValueRunState.Success(
                             result = parsed,
                             sentPhotoCount = sentCount,
@@ -133,32 +194,51 @@ class QuickValueRunner(
                         Result.success(Unit)
                     } else {
                         val err = validated.exceptionOrNull()?.message ?: "JSON 스키마 검증 실패"
+                        countdownJob?.cancel()
+                        countdownJob = null
+                        countdownTracker.reset()
                         _state.value = QuickValueRunState.Error("가치 분석 결과를 해석하지 못했습니다: $err")
                         Result.failure(validated.exceptionOrNull() ?: Exception(err))
                     }
                 }
             }
 
-            runStartTimeMs = System.currentTimeMillis()
-            startHostCountdown(sentCount, similarExcluded, limitExcluded)
-
             // Listen to session progress
             launch {
                 session.progress.collect { prog ->
                     if (_state.value is QuickValueRunState.Running) {
-                        val elapsed = (System.currentTimeMillis() - runStartTimeMs) / 1000.0
-                        if (CountdownFormatter.isExpired(elapsed)) {
-                            _state.value = QuickValueRunState.Timeout
-                            session.cancelCurrentTask()
-                        } else {
-                            _state.value = QuickValueRunState.Running(
-                                phase = prog.phase,
-                                elapsedSeconds = elapsed,
-                                statusMessage = prog.statusMessage,
-                                sentPhotoCount = sentCount,
-                                excludedSimilarCount = similarExcluded,
-                                excludedLimitCount = limitExcluded
-                            )
+                        val status = countdownTracker.onPhaseProgress(prog.phase)
+                        when (status) {
+                            is CountdownStatus.Expired -> {
+                                countdownJob?.cancel()
+                                countdownJob = null
+                                countdownTracker.reset()
+                                _state.value = QuickValueRunState.Timeout
+                                session.cancelCurrentTask()
+                            }
+                            is CountdownStatus.Active -> {
+                                if (countdownJob == null || !countdownJob!!.isActive) {
+                                    startHostCountdown()
+                                }
+                                _state.value = QuickValueRunState.Running(
+                                    phase = prog.phase,
+                                    elapsedSeconds = status.elapsedSeconds,
+                                    statusMessage = prog.statusMessage,
+                                    sentPhotoCount = sentCount,
+                                    excludedSimilarCount = similarExcluded,
+                                    excludedLimitCount = limitExcluded
+                                )
+                            }
+                            is CountdownStatus.NotStarted -> {
+                                _state.value = QuickValueRunState.Running(
+                                    phase = prog.phase,
+                                    elapsedSeconds = null,
+                                    statusMessage = prog.statusMessage,
+                                    sentPhotoCount = sentCount,
+                                    excludedSimilarCount = similarExcluded,
+                                    excludedLimitCount = limitExcluded
+                                )
+                            }
                         }
                     }
                 }
@@ -168,6 +248,9 @@ class QuickValueRunner(
             launch {
                 session.lastErrorMessage.collect { err ->
                     if (err != null && _state.value !is QuickValueRunState.Success) {
+                        countdownJob?.cancel()
+                        countdownJob = null
+                        countdownTracker.reset()
                         _state.value = QuickValueRunState.Error(err)
                     }
                 }
@@ -175,7 +258,7 @@ class QuickValueRunner(
 
             _state.value = QuickValueRunState.Running(
                 phase = AIBIPhase.INITIALIZING,
-                elapsedSeconds = 0.0,
+                elapsedSeconds = null,
                 statusMessage = "ChatGPT에 연결하고 있습니다...",
                 sentPhotoCount = sentCount,
                 excludedSimilarCount = similarExcluded,
@@ -183,20 +266,42 @@ class QuickValueRunner(
             )
 
             session.startTask(task, config, hiddenContainer)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                countdownJob?.cancel()
+                countdownJob = null
+                countdownTracker.reset()
+                aibiSession?.cancelCurrentTask()
+                aibiSession = null
+                _state.value = QuickValueRunState.Error(preparationErrorMessage(error))
+            }
         }
     }
 
-    private fun startHostCountdown(
-        sentCount: Int,
-        similarExcluded: Int,
-        limitExcluded: Int
-    ) {
+    private fun preparationErrorMessage(error: Throwable): String = when (error.message) {
+        "EMPTY_IMAGE", "UNSUPPORTED_IMAGE", "IMAGE_DECODE_FAILED" ->
+            "선택한 사진을 읽지 못했습니다. 다른 사진으로 다시 시도해주세요."
+        "IMAGE_ENCODE_FAILED", "IMAGE_SIZE_TARGET_UNREACHABLE" ->
+            "사진을 분석용으로 준비하지 못했습니다. 더 작은 원본으로 다시 시도해주세요."
+        "ATTACHMENT_LIMIT_EXCEEDED" ->
+            "한 번에 보낼 수 있는 사진 수를 초과했습니다."
+        else -> "사진 분석을 시작하지 못했습니다. 잠시 후 다시 시도해주세요."
+    }
+
+    private fun startHostCountdown() {
         countdownJob?.cancel()
         countdownJob = scope.launch {
             while (isActive) {
                 delay(300L)
-                val elapsed = (System.currentTimeMillis() - runStartTimeMs) / 1000.0
+                val elapsed = countdownTracker.computeCurrentElapsed()
+                if (elapsed == null) {
+                    break
+                }
                 if (CountdownFormatter.isExpired(elapsed)) {
+                    countdownJob?.cancel()
+                    countdownJob = null
+                    countdownTracker.reset()
                     if (_state.value is QuickValueRunState.Running) {
                         _state.value = QuickValueRunState.Timeout
                         aibiSession?.cancelCurrentTask()
@@ -215,6 +320,9 @@ class QuickValueRunner(
         val validated = QuickValueResultValidator.validate(text, activeSentRoles)
         return if (validated.isSuccess) {
             val parsed = validated.getOrThrow()
+            countdownJob?.cancel()
+            countdownJob = null
+            countdownTracker.reset()
             _state.value = QuickValueRunState.Success(
                 result = parsed,
                 sentPhotoCount = activeSentRoles.size,
@@ -237,6 +345,7 @@ class QuickValueRunner(
     fun cancel() {
         countdownJob?.cancel()
         countdownJob = null
+        countdownTracker.reset()
         taskJob?.cancel()
         taskJob = null
         aibiSession?.cancelCurrentTask()
@@ -253,7 +362,7 @@ class QuickValueRunner(
 
     fun injectRunningState(
         phase: AIBIPhase,
-        elapsedSeconds: Double,
+        elapsedSeconds: Double? = null,
         statusMessage: String,
         sentPhotoCount: Int,
         excludedSimilarCount: Int = 0,
@@ -297,4 +406,9 @@ class QuickValueRunner(
 
     val currentSession: AIBISession?
         get() = aibiSession
+
+    companion object {
+        fun isCountdownEligiblePhase(phase: AIBIPhase): Boolean =
+            QuickValueCountdownTracker.isCountdownEligiblePhase(phase)
+    }
 }

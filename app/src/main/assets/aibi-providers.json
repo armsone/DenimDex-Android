@@ -183,19 +183,31 @@
         "loginIndicator": [
           "button[data-testid='login-button']",
           "a[href*='/auth/login']",
-          "button:contains('Log in')"
+          "a[href*='login.openai.com']",
+          "a[href*='auth.openai.com']",
+          "button[data-testid='signup-button']",
+          "button[data-testid='login']",
+          "a[href*='/login']"
         ],
         "authenticatedIndicator": [
           "button[data-testid='profile-button']",
           "button[data-testid='user-menu-button']",
           "button[data-testid='user-menu']",
           "button[data-testid='accounts-profile-button']",
-          "button[aria-label*='profile menu' i]"
+          "button[aria-label*='profile menu' i]",
+          "button[aria-label*='User menu' i]",
+          "button[aria-label*='계정' i]",
+          "button[aria-label*='프로필' i]",
+          "[data-testid='accounts-profile-button']",
+          "[data-testid='profile-button']",
+          "[data-testid='user-avatar']"
         ],
         "challengeIndicator": [
           "#cf-challenge-running",
           "iframe[src*='challenges.cloudflare.com']",
-          "#challenge-form"
+          "#challenge-form",
+          "#challenge-stage",
+          "iframe[src*='turnstile']"
         ],
         "attachmentInput": [
           "input[type='file'][accept*='image']",

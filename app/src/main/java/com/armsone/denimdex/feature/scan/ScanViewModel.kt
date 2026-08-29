@@ -5,6 +5,7 @@ import android.net.Uri
 import android.view.ViewGroup
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.armsone.denimdex.core.aibi.AIBILoginClassifier
 import com.armsone.denimdex.core.aibi.AIBILoginStatusStore
 import com.armsone.denimdex.core.aibi.AIBIProviderRegistry
 import com.armsone.denimdex.core.aibi.LoginStatus
@@ -134,10 +135,10 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
     fun onStartValuationClicked(hiddenContainer: ViewGroup) {
         if (_photos.value.isEmpty()) return
 
-        // 1. Check Login
-        loginStore.checkStatus()
+        // 1. Check Login: block only on confirmed LOGIN_REQUIRED or explicit logout;
+        // UNKNOWN should allow the AIBI engine to reach its safe visible-takeover behavior rather than falsely demanding login.
         val currentLogin = loginStore.status.value
-        if (currentLogin == LoginStatus.LOGIN_REQUIRED || userPreferences.explicitChatGPTLogout) {
+        if (AIBILoginClassifier.shouldBlockScanStart(currentLogin, userPreferences.explicitChatGPTLogout)) {
             _showLoginSheet.value = true
             return
         }
@@ -149,6 +150,10 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         startRunner(hiddenContainer)
+    }
+
+    fun refreshLoginStatus(container: ViewGroup) {
+        loginStore.checkStatus(container)
     }
 
     fun onConsentAgreed(hiddenContainer: ViewGroup) {
@@ -253,7 +258,8 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
-        super.onCleared()
+        loginStore.close()
         runner.cancel()
+        super.onCleared()
     }
 }

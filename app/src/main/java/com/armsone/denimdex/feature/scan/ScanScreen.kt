@@ -7,6 +7,7 @@ import android.widget.FrameLayout
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -15,6 +16,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -41,6 +44,7 @@ import com.armsone.denimdex.core.design.*
 import com.armsone.denimdex.core.domain.CountdownFormatter
 import java.util.Locale
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ScanScreen(
     viewModel: ScanViewModel,
@@ -98,12 +102,31 @@ fun ScanScreen(
                     isClickable = false
                     isFocusable = false
                     hiddenContainerView = this
+                    post { viewModel.refreshLoginStatus(this) }
                 }
             },
             modifier = Modifier.size(width = 375.dp, height = 667.dp)
         )
 
         // Main Scroll Content
+        val analyzeButtonRequester = remember { BringIntoViewRequester() }
+        val runningPanelRequester = remember { BringIntoViewRequester() }
+
+        var previousPhotoCount by remember { mutableIntStateOf(photos.size) }
+        LaunchedEffect(photos.size) {
+            if (photos.size > previousPhotoCount) {
+                analyzeButtonRequester.bringIntoView()
+            }
+            previousPhotoCount = photos.size
+        }
+
+        val isRunning = runState is QuickValueRunState.Running || runState is QuickValueRunState.Preparing
+        LaunchedEffect(isRunning) {
+            if (isRunning) {
+                runningPanelRequester.bringIntoView()
+            }
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -132,7 +155,6 @@ fun ScanScreen(
             )
 
             // 3. Execution Action Button
-            val isRunning = runState is QuickValueRunState.Running || runState is QuickValueRunState.Preparing
             DenimPrimaryButton(
                 text = "가치 확인하기",
                 onClick = {
@@ -141,7 +163,9 @@ fun ScanScreen(
                     }
                 },
                 enabled = photos.isNotEmpty() && !isRunning,
-                modifier = Modifier.testTag(DenimTestTags.SCAN_START_BUTTON),
+                modifier = Modifier
+                    .testTag(DenimTestTags.SCAN_START_BUTTON)
+                    .bringIntoViewRequester(analyzeButtonRequester),
                 leadingIcon = {
                     Icon(
                         imageVector = Icons.Default.AutoAwesome,
@@ -167,14 +191,16 @@ fun ScanScreen(
                 val state = runState as QuickValueRunState.Running
                 RunningPanel(
                     state = state,
-                    onCancel = { viewModel.runner.cancel() }
+                    onCancel = { viewModel.runner.cancel() },
+                    modifier = Modifier.bringIntoViewRequester(runningPanelRequester)
                 )
             } else if (runState is QuickValueRunState.Preparing) {
                 val state = runState as QuickValueRunState.Preparing
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .testTag(DenimTestTags.SCAN_RUNNING_PANEL),
+                        .testTag(DenimTestTags.SCAN_RUNNING_PANEL)
+                        .bringIntoViewRequester(runningPanelRequester),
                     colors = CardDefaults.cardColors(containerColor = DenimColors.cardSurface)
                 ) {
                     Row(
@@ -686,14 +712,15 @@ private fun AddPhotoTile(
 @Composable
 private fun RunningPanel(
     state: QuickValueRunState.Running,
-    onCancel: () -> Unit
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    val remainingSec = CountdownFormatter.remainingSeconds(state.elapsedSeconds)
-    val fraction = CountdownFormatter.progressFraction(state.elapsedSeconds)
-    val formattedTime = CountdownFormatter.formatMinutesSeconds(remainingSec)
+    val remainingSec = state.elapsedSeconds?.let { CountdownFormatter.remainingSeconds(it) }
+    val fraction = state.elapsedSeconds?.let { CountdownFormatter.progressFraction(it) }
+    val formattedTime = remainingSec?.let { CountdownFormatter.formatMinutesSeconds(it) }
 
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .testTag(DenimTestTags.SCAN_RUNNING_PANEL)
             .denimCard(padding = 16.dp),
@@ -726,28 +753,30 @@ private fun RunningPanel(
             }
         }
 
-        // Countdown row
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "남은 시간 $formattedTime",
-                style = DenimTypography.captionBold.copy(color = DenimColors.indigoBright),
-                modifier = Modifier.testTag(DenimTestTags.SCAN_RUNNING_COUNTDOWN)
+        // Countdown row and progress bar (rendered only after generation/stabilization starts)
+        if (state.elapsedSeconds != null && formattedTime != null && fraction != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "남은 시간 $formattedTime",
+                    style = DenimTypography.captionBold.copy(color = DenimColors.indigoBright),
+                    modifier = Modifier.testTag(DenimTestTags.SCAN_RUNNING_COUNTDOWN)
+                )
+            }
+
+            LinearProgressIndicator(
+                progress = { fraction },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp)),
+                color = DenimColors.indigo,
+                trackColor = DenimColors.fadedDenim
             )
         }
-
-        LinearProgressIndicator(
-            progress = { fraction },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(6.dp)
-                .clip(RoundedCornerShape(3.dp)),
-            color = DenimColors.indigo,
-            trackColor = DenimColors.fadedDenim
-        )
 
         // Photo count summary
         Text(

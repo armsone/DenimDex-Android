@@ -62,6 +62,8 @@ class AIBISession(
     private var consecutiveMisses = 0
     private var submitAttemptCount = 0
     private var baselineAssistantCount = 0
+    private var baselineUserCount = 0
+    private var baselineUrl = ""
     private var stabilityText: String? = null
     private var stabilityTickCount = 0
 
@@ -291,6 +293,8 @@ class AIBISession(
                     val json = JSONObject(baselineResult)
                     val data = json.optJSONObject("data")
                     baselineAssistantCount = data?.optInt("assistantCount", 0) ?: 0
+                    baselineUserCount = data?.optInt("userCount", 0) ?: 0
+                    baselineUrl = data?.optString("currentUrl", "") ?: ""
                 } catch (_: Exception) {}
             }
 
@@ -299,13 +303,54 @@ class AIBISession(
                 return@launch
             }
 
-            // Inject
-            val escapedPrompt = JSONObject.quote(task.promptText)
-            val injectScript = "window.__AIBI_RUNTIME__.injectPrompt($configJsonStr, $escapedPrompt, ${task.forceFill})"
-            val injectResult = evaluateScript(webView, injectScript)
             if (generationId != generation) return@launch
 
-            if (injectResult != null && JSONObject(injectResult).optBoolean("success", false)) {
+            // Bounded prompt injection & persistence verification loop
+            val escapedPrompt = JSONObject.quote(task.promptText)
+            val maxAttempts = timingProfile.promptInjectionMaxAttempts
+            val retryDelayMs = timingProfile.promptInjectionRetryDelayMs
+
+            var attempt = 1
+            var injectionSucceeded = false
+
+            while (attempt <= maxAttempts && generationId == generation) {
+                val injectScript = "window.__AIBI_RUNTIME__.injectPrompt($configJsonStr, $escapedPrompt, ${task.forceFill})"
+                val rawInjectResult = evaluateScript(webView, injectScript)
+                if (generationId != generation) return@launch
+
+                val injectResult = AIBIPromptInjectionClassifier.parseInjectionResult(rawInjectResult)
+
+                if (injectResult.errorCode == "EXISTING_TEXT_PRESERVED") {
+                    // Terminal: user text must never be overwritten or retried.
+                    failWithError("ChatGPT 입력창에 이미 다른 내용이 있어 자동 입력을 건너뛰었습니다. 직접 확인해주세요.")
+                    return@launch
+                }
+
+                val verifyResult = if (injectResult.isSuccess) {
+                    val verifyScript = "window.__AIBI_RUNTIME__.verifyPromptInjected($configJsonStr, $escapedPrompt)"
+                    val rawVerifyResult = evaluateScript(webView, verifyScript)
+                    if (generationId != generation) return@launch
+                    AIBIPromptInjectionClassifier.parseVerifyResult(rawVerifyResult)
+                } else {
+                    null
+                }
+
+                val outcome = AIBIPromptInjectionClassifier.classify(injectResult, verifyResult)
+                if (outcome == AIBIPromptInjectionOutcome.SUCCESS_VERIFIED) {
+                    injectionSucceeded = true
+                    break
+                }
+
+                if (attempt < maxAttempts) {
+                    delay(retryDelayMs)
+                    if (generationId != generation) return@launch
+                }
+                attempt++
+            }
+
+            if (generationId != generation) return@launch
+
+            if (injectionSucceeded) {
                 startSubmissionLoop(generation)
             } else {
                 escalateToVisible(AIBIFallbackReason.INPUT_NOT_FOUND)
@@ -439,7 +484,8 @@ class AIBISession(
         delay(timingProfile.submitVerificationDelayMs)
         if (generationId != generation) return
 
-        val verifyScript = "window.__AIBI_RUNTIME__.verifySubmission($configJsonStr, $baselineAssistantCount)"
+        val verifyScript = "window.__AIBI_RUNTIME__.verifySubmission(" +
+            "$configJsonStr, $baselineAssistantCount, $baselineUserCount, ${JSONObject.quote(baselineUrl)})"
         val verifyResult = evaluateScript(webView, verifyScript)
         if (verifyResult != null) {
             try {
@@ -508,7 +554,10 @@ class AIBISession(
                     stabilityTickCount++
                     // stabilityRequiredTicks = 2 means 3 matching consecutive ticks
                     if (stabilityTickCount >= timingProfile.stabilityRequiredTicks) {
-                        activeJob?.cancel()
+                        // Do not cancel the observation job here: this function is
+                        // running inside that job and still needs to suspend while
+                        // cleaning and committing the result. completeWithResult()
+                        // owns cancellation after the handoff succeeds.
                         val cleanScript = "window.__AIBI_RUNTIME__.cleanOutput(${JSONObject.quote(rawText)}, '${task.providerId}')"
                         var cleaned = rawText
                         val cleanResult = evaluateScript(webView, cleanScript)

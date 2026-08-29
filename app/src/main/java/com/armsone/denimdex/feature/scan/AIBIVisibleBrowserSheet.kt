@@ -30,7 +30,7 @@ import com.armsone.denimdex.core.domain.CountdownFormatter
 @Composable
 fun AIBIVisibleBrowserSheet(
     runner: QuickValueRunner,
-    elapsedSeconds: Double,
+    elapsedSeconds: Double?,
     onDismiss: () -> Unit,
     onResultImported: () -> Unit
 ) {
@@ -40,9 +40,9 @@ fun AIBIVisibleBrowserSheet(
     var pasteText by remember { mutableStateOf("") }
     var pasteError by remember { mutableStateOf<String?>(null) }
 
-    val remainingSec = CountdownFormatter.remainingSeconds(elapsedSeconds)
-    val fraction = CountdownFormatter.progressFraction(elapsedSeconds)
-    val formattedTime = CountdownFormatter.formatMinutesSeconds(remainingSec)
+    val remainingSec = elapsedSeconds?.let(CountdownFormatter::remainingSeconds)
+    val fraction = elapsedSeconds?.let(CountdownFormatter::progressFraction)
+    val formattedTime = remainingSec?.let(CountdownFormatter::formatMinutesSeconds)
 
     Surface(
         modifier = Modifier
@@ -119,7 +119,7 @@ fun AIBIVisibleBrowserSheet(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "남은 시간 $formattedTime",
+                        text = formattedTime?.let { "남은 시간 $it" } ?: "ChatGPT 작업을 준비하고 있습니다",
                         style = DenimTypography.captionBold.copy(color = DenimColors.indigoBright)
                     )
                     Text(
@@ -127,16 +127,18 @@ fun AIBIVisibleBrowserSheet(
                         style = DenimTypography.caption.copy(color = DenimColors.inkSoft)
                     )
                 }
-                Spacer(modifier = Modifier.height(4.dp))
-                LinearProgressIndicator(
-                    progress = { fraction },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(4.dp)
-                        .clip(RoundedCornerShape(2.dp)),
-                    color = DenimColors.indigo,
-                    trackColor = DenimColors.fadedDenim,
-                )
+                if (fraction != null) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    LinearProgressIndicator(
+                        progress = { fraction },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(2.dp)),
+                        color = DenimColors.indigo,
+                        trackColor = DenimColors.fadedDenim,
+                    )
+                }
             }
 
             // Visible WebView

@@ -11,12 +11,12 @@ android {
         applicationId = "com.armsone.denimdex"
         minSdk = 26
         targetSdk = 37
-        versionCode = 346052
-        versionName = "0.2.0"
+        versionCode = 346562
+        versionName = "0.2.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        buildConfigField("long", "SOURCE_DISPLAY_BUILD", "202608291019L")
+        buildConfigField("long", "SOURCE_DISPLAY_BUILD", "202608291602L")
     }
 
     buildTypes {

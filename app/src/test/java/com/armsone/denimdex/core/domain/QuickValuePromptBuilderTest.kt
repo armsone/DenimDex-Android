@@ -8,6 +8,14 @@ import org.junit.Test
 class QuickValuePromptBuilderTest {
 
     @Test
+    fun `prompt forbids web search and external tools for bounded response time`() {
+        val prompt = QuickValuePromptBuilder.buildPrompt(1)
+
+        assertTrue(prompt.contains("웹 검색, 외부 도구 호출"))
+        assertTrue(prompt.contains("즉시 응답"))
+    }
+
+    @Test
     fun `prompt enumerates photo identifiers in order`() {
         val prompt = QuickValuePromptBuilder.buildPrompt(3)
         assertTrue(prompt.contains("1번 사진: photo_1"))

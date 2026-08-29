@@ -22,6 +22,7 @@ object QuickValuePromptBuilder {
             appendLine("- variant는 사진에서 판별 근거가 있을 때만 적고, 확신할 수 없으면 빈 문자열로 두어라.")
             appendLine("- estimatedProductionYear에는 케어라벨, 로트 번호, 탭, 지퍼, 리벳 등 사진 단서로 추정한 생산연도 또는 연도 범위를 적어라. estimatedFactory에는 공장 코드나 원산지 표기 등 사진 근거로 추정한 제조공장 또는 생산지를 적어라. 근거가 부족하면 각각 빈 문자열로 두고, 근거가 있으면 observations에 해당 사진과 certainty를 남겨라.")
             appendLine("- 실시간 거래 데이터베이스는 연결되어 있지 않으므로, 이는 일반 지식에 기반한 넓은 참고 범위이며 가격과 환율 모두 실시간으로 검증되지 않았다는 사실을 caveats에 명시해라.")
+            appendLine("- 웹 검색, 외부 도구 호출, 추가 조사나 장시간 추론을 하지 말고 첨부 사진과 일반 지식만으로 즉시 응답해라.")
             appendLine("- jpyToKrwRate는 \"엔화 1엔당 원화\" 환율로, 반드시 0보다 큰 값을 제시해라 (예: 9.1).")
             appendLine("- 사진에서 직접 보이지 않는 특징을 관찰된 사실처럼 적지 마라.")
             appendLine("- 판단이 어려우면 무리하게 브랜드나 모델을 단정하지 말고 confidence를 낮춰라.")

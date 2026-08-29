@@ -1,16 +1,14 @@
 package com.armsone.denimdex.feature.scan
 
 import android.annotation.SuppressLint
+import android.webkit.WebSettings
 import android.view.ViewGroup
 import android.webkit.CookieManager
-import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -19,11 +17,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.armsone.denimdex.core.aibi.AIBILoginClassifier
 import com.armsone.denimdex.core.design.DenimColors
-import com.armsone.denimdex.core.design.DenimTheme
 import com.armsone.denimdex.core.design.DenimTypography
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import java.util.concurrent.atomic.AtomicBoolean
 
 @SuppressLint("SetJavaScriptEnabled")
 @OptIn(ExperimentalMaterial3Api::class)
@@ -33,6 +35,23 @@ fun AIBILoginSheet(
     onLoginSuccess: () -> Unit
 ) {
     var isVerified by remember { mutableStateOf(false) }
+    val isCompleted = remember { AtomicBoolean(false) }
+    val coroutineScope = rememberCoroutineScope()
+    var pollingJob by remember { mutableStateOf<Job?>(null) }
+    var activeWebView by remember { mutableStateOf<WebView?>(null) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            pollingJob?.cancel()
+            pollingJob = null
+            activeWebView?.apply {
+                stopLoading()
+                webViewClient = WebViewClient()
+                destroy()
+            }
+            activeWebView = null
+        }
+    }
 
     Surface(
         modifier = Modifier
@@ -56,7 +75,11 @@ fun AIBILoginSheet(
                     style = DenimTypography.title3.copy(color = DenimColors.charcoal)
                 )
 
-                TextButton(onClick = onDismiss) {
+                TextButton(onClick = {
+                    pollingJob?.cancel()
+                    pollingJob = null
+                    onDismiss()
+                }) {
                     Text(
                         text = "닫기",
                         style = DenimTypography.subheadline.copy(
@@ -89,6 +112,7 @@ fun AIBILoginSheet(
             AndroidView(
                 factory = { ctx ->
                     WebView(ctx).apply {
+                        activeWebView = this
                         layoutParams = ViewGroup.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.MATCH_PARENT
@@ -103,24 +127,43 @@ fun AIBILoginSheet(
                         val cookieManager = CookieManager.getInstance()
                         cookieManager.setAcceptCookie(true)
 
+                        cookieManager.setAcceptThirdPartyCookies(this, true)
+                        settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                        val checkScript = AIBILoginClassifier.buildProbeScript()
+
+                        fun checkPositiveAuthentication() {
+                            if (isCompleted.get() || !AIBILoginClassifier.canInspectUrl(url)) return
+                            evaluateJavascript(checkScript) { result ->
+                                if (AIBILoginClassifier.parseProbeResult(result) == com.armsone.denimdex.core.aibi.LoginStatus.LOGGED_IN) {
+                                    if (isCompleted.compareAndSet(false, true)) {
+                                        pollingJob?.cancel()
+                                        pollingJob = null
+                                        isVerified = true
+                                        CookieManager.getInstance().flush()
+                                        onLoginSuccess()
+                                    }
+                                }
+                            }
+                        }
+
+                        fun startHydrationPolling() {
+                            if (isCompleted.get()) return
+                            pollingJob?.cancel()
+                            pollingJob = coroutineScope.launch {
+                                val deadline = System.currentTimeMillis() + 20_000L
+                                while (isActive && !isCompleted.get() && System.currentTimeMillis() < deadline) {
+                                    checkPositiveAuthentication()
+                                    delay(500L)
+                                }
+                            }
+                        }
+
                         webViewClient = object : WebViewClient() {
                             override fun onPageFinished(view: WebView?, url: String?) {
                                 super.onPageFinished(view, url)
-                                // Probe for profile / user menu presence indicating successful sign-in
-                                view?.evaluateJavascript(
-                                    """
-                                    (function() {
-                                        const userMenu = document.querySelector("button[data-testid='profile-button'], button[data-testid='user-menu-button'], button[data-testid='user-menu'], button[data-testid='accounts-profile-button']");
-                                        const promptArea = document.querySelector("#prompt-textarea, textarea[data-id='root']");
-                                        return (userMenu !== null || promptArea !== null) ? 'logged_in' : 'not_yet';
-                                    })()
-                                    """.trimIndent()
-                                ) { result ->
-                                    val clean = result?.replace("\"", "")?.trim()
-                                    if (clean == "logged_in") {
-                                        isVerified = true
-                                        onLoginSuccess()
-                                    }
+                                if (AIBILoginClassifier.canInspectUrl(url)) {
+                                    checkPositiveAuthentication()
+                                    startHydrationPolling()
                                 }
                             }
                         }

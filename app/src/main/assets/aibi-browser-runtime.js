@@ -177,6 +177,9 @@
   RUNTIME.getBaselineState = function (config) {
     try {
       const assistantEls = queryPreferredAll(config.selectors.assistantMessage);
+      const userEls = document.querySelectorAll(
+        '[data-message-author-role="user"], article[data-turn="user"], section[data-turn="user"]'
+      );
       const isLoginVisible = isVisible(queryFirst(config.selectors.loginIndicator));
       const isChallengeVisible = isVisible(queryFirst(config.selectors.challengeIndicator));
 
@@ -184,6 +187,7 @@
         success: true,
         data: {
           assistantCount: assistantEls.length,
+          userCount: userEls.length,
           isLoggedIn: !isLoginVisible,
           hasChallenge: isChallengeVisible,
           currentUrl: window.location.href,
@@ -533,6 +537,44 @@
   };
 
   /**
+   * 3.1. Prompt Injection Verification
+   * Re-queries current prompt input and reports exact trimmed-text match and current length
+   * without returning prompt content.
+   */
+  RUNTIME.verifyPromptInjected = function (config, promptText) {
+    try {
+      const inputEl = queryFirst(config.selectors.promptInput);
+      if (!inputEl) {
+        return JSON.stringify({
+          success: false,
+          code: 'INPUT_NOT_FOUND',
+          error: 'Target prompt input element was not found.',
+        });
+      }
+
+      const isContentEditable =
+        inputEl.isContentEditable || inputEl.getAttribute('contenteditable') === 'true';
+      const currentText = isContentEditable ? (inputEl.innerText || '').trim() : (inputEl.value || '').trim();
+      const targetText = (promptText || '').trim();
+      const matches = currentText.length > 0 && currentText === targetText;
+
+      return JSON.stringify({
+        success: true,
+        data: {
+          matches: matches,
+          currentLength: currentText.length,
+          isContentEditable: isContentEditable,
+        },
+      });
+    } catch (err) {
+      return JSON.stringify({
+        success: false,
+        error: String(err && err.message ? err.message : err),
+      });
+    }
+  };
+
+  /**
    * 4. Submission Escalation
    * Escalates across multiple interaction modalities:
    * Attempt 1: Button click
@@ -615,11 +657,14 @@
    * 5. Submission Verification
    * Verifies that the prompt was received: input cleared, assistant count incremented, or generating active.
    */
-  RUNTIME.verifySubmission = function (config, baselineAssistantCount) {
+  RUNTIME.verifySubmission = function (config, baselineAssistantCount, baselineUserCount, baselineUrl) {
     try {
       const inputEl = queryFirst(config.selectors.promptInput);
       const assistantEls = queryPreferredAll(config.selectors.assistantMessage);
       const stopBtn = queryFirst(config.selectors.stopButton);
+      const userEls = document.querySelectorAll(
+        '[data-message-author-role="user"], article[data-turn="user"], section[data-turn="user"]'
+      );
 
       let inputCleared = false;
       if (inputEl) {
@@ -630,9 +675,15 @@
       }
 
       const countIncreased = assistantEls.length > (baselineAssistantCount || 0);
+      const userCountIncreased = userEls.length > (baselineUserCount || 0);
       const isGeneratingVisible = isVisible(stopBtn);
+      const urlChanged = typeof baselineUrl === 'string' && baselineUrl.length > 0 &&
+        window.location.href !== baselineUrl;
 
-      const isSubmitted = inputCleared || countIncreased || isGeneratingVisible;
+      // A cleared composer alone is not proof of submission. Modern providers may
+      // recreate or clear the editor while attachments are still settling.
+      const isSubmitted = countIncreased || userCountIncreased || isGeneratingVisible ||
+        (inputCleared && urlChanged);
 
       return JSON.stringify({
         success: true,
@@ -640,6 +691,8 @@
           submitted: isSubmitted,
           inputCleared: inputCleared,
           countIncreased: countIncreased,
+          userCountIncreased: userCountIncreased,
+          urlChanged: urlChanged,
           isGeneratingVisible: isGeneratingVisible,
           currentAssistantCount: assistantEls.length,
         },
