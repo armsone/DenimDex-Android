@@ -1,6 +1,9 @@
 package com.armsone.denimdex.feature.guide
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -10,21 +13,34 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.armsone.denimdex.core.design.*
 import com.armsone.denimdex.core.model.EvidencePhotoRole
+import com.armsone.denimdex.feature.scan.GuidedCaptureStep
+import com.armsone.denimdex.feature.scan.GuidedCapturePresets
+import com.armsone.denimdex.feature.scan.GuidedReferencePreviewOverlay
 
 @Composable
 fun LearnScreen(modifier: Modifier = Modifier) {
+    var referencePreviewStep by remember { mutableStateOf<GuidedCaptureStep?>(null) }
+
+    Box(modifier = modifier.fillMaxSize()) {
     Column(
-        modifier = modifier
+        modifier = Modifier
             .fillMaxSize()
             .testTag(DenimTestTags.GUIDE_SCREEN)
             .background(DenimColors.canvas)
@@ -83,6 +99,38 @@ fun LearnScreen(modifier: Modifier = Modifier) {
                 "케어 라벨" to "주름을 펴고 글자가 또렷하게 보이도록 촬영해주세요."
             ).forEach { (label, desc) ->
                 BulletLine(label = label, description = desc)
+            }
+        }
+
+        GuideSection(
+            icon = Icons.Default.Checkroom,
+            title = "팬츠 9컷 촬영 순서",
+            modifier = Modifier.testTag(DenimTestTags.GUIDE_SECTION_PANTS_STEPS)
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                GuidedCapturePresets.pantsSteps.forEachIndexed { index, step ->
+                    GuidedStepLine(
+                        order = index + 1,
+                        step = step,
+                        onShowReference = { referencePreviewStep = step }
+                    )
+                }
+            }
+        }
+
+        GuideSection(
+            icon = Icons.Default.Checkroom,
+            title = "재킷 9컷 촬영 순서",
+            modifier = Modifier.testTag(DenimTestTags.GUIDE_SECTION_JACKET_STEPS)
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                GuidedCapturePresets.jacketSteps.forEachIndexed { index, step ->
+                    GuidedStepLine(
+                        order = index + 1,
+                        step = step,
+                        onShowReference = { referencePreviewStep = step }
+                    )
+                }
             }
         }
 
@@ -150,6 +198,55 @@ fun LearnScreen(modifier: Modifier = Modifier) {
         }
 
         Spacer(modifier = Modifier.height(32.dp))
+    }
+
+    // Reference Image Enlargement Overlay (tap anywhere to dismiss)
+    referencePreviewStep?.let { step ->
+        GuidedReferencePreviewOverlay(
+            previewRes = step.previewRes,
+            contentDescription = "${step.title} 참고 이미지 확대",
+            onDismiss = { referencePreviewStep = null }
+        )
+    }
+    }
+}
+
+@Composable
+private fun GuidedStepLine(
+    order: Int,
+    step: GuidedCaptureStep,
+    onShowReference: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        val shape = RoundedCornerShape(10.dp)
+        Image(
+            painter = painterResource(step.thumbnailRes),
+            contentDescription = "${step.title} 참고 이미지",
+            modifier = Modifier
+                .size(44.dp)
+                .clip(shape)
+                .border(1.dp, DenimColors.hairline, shape)
+                .clickable { onShowReference() },
+            contentScale = ContentScale.Crop
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "$order. ${step.title}",
+                style = DenimTypography.captionBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = step.instruction,
+                style = DenimTypography.caption.copy(color = DenimColors.inkSoft),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
     }
 }
 

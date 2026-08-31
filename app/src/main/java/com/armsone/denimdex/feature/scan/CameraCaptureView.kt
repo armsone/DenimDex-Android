@@ -263,7 +263,7 @@ fun CameraCaptureView(
     }
 }
 
-private fun saveToMediaStore(context: Context, bytes: ByteArray, onIssue: () -> Unit) {
+internal fun saveToMediaStore(context: Context, bytes: ByteArray, onIssue: () -> Unit) {
     try {
         val resolver = context.contentResolver
         val contentValues = ContentValues().apply {

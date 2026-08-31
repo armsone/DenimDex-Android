@@ -55,6 +55,111 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
     private val _showPhotoSaveAlert = MutableStateFlow(false)
     val showPhotoSaveAlert: StateFlow<Boolean> = _showPhotoSaveAlert.asStateFlow()
 
+    private val _captureMode = MutableStateFlow(ScanCaptureMode.PANTS)
+    val captureMode: StateFlow<ScanCaptureMode> = _captureMode.asStateFlow()
+
+    private val _pantsSlots = MutableStateFlow(GuidedCapturePresets.emptySlots(ScanCaptureMode.PANTS))
+    val pantsSlots: StateFlow<List<GuidedSlotState>> = _pantsSlots.asStateFlow()
+
+    private val _jacketSlots = MutableStateFlow(GuidedCapturePresets.emptySlots(ScanCaptureMode.JACKET))
+    val jacketSlots: StateFlow<List<GuidedSlotState>> = _jacketSlots.asStateFlow()
+
+    private val _showGuidedCamera = MutableStateFlow(false)
+    val showGuidedCamera: StateFlow<Boolean> = _showGuidedCamera.asStateFlow()
+
+    private val _guidedCameraStartIndex = MutableStateFlow(0)
+    val guidedCameraStartIndex: StateFlow<Int> = _guidedCameraStartIndex.asStateFlow()
+
+    private val _showGuidedClearConfirm = MutableStateFlow(false)
+    val showGuidedClearConfirm: StateFlow<Boolean> = _showGuidedClearConfirm.asStateFlow()
+
+    fun setCaptureMode(mode: ScanCaptureMode) {
+        _captureMode.value = mode
+    }
+
+    fun guidedSlots(mode: ScanCaptureMode): List<GuidedSlotState> = when (mode) {
+        ScanCaptureMode.PANTS -> _pantsSlots.value
+        ScanCaptureMode.JACKET -> _jacketSlots.value
+        ScanCaptureMode.FREE -> emptyList()
+    }
+
+    private fun updateGuidedSlot(mode: ScanCaptureMode, index: Int, transform: (GuidedSlotState) -> GuidedSlotState) {
+        val flow = when (mode) {
+            ScanCaptureMode.PANTS -> _pantsSlots
+            ScanCaptureMode.JACKET -> _jacketSlots
+            ScanCaptureMode.FREE -> return
+        }
+        val current = flow.value
+        if (index !in current.indices) return
+        flow.value = current.toMutableList().also { it[index] = transform(it[index]) }
+    }
+
+    fun setGuidedSlotPhoto(mode: ScanCaptureMode, index: Int, bytes: ByteArray) {
+        updateGuidedSlot(mode, index) { GuidedSlotState(photo = bytes, isSkipped = false) }
+    }
+
+    fun skipGuidedSlot(mode: ScanCaptureMode, index: Int) {
+        updateGuidedSlot(mode, index) { slot ->
+            if (slot.isCaptured) slot else slot.copy(isSkipped = true)
+        }
+    }
+
+    fun addGuidedSlotPhotoFromUri(mode: ScanCaptureMode, index: Int, uri: Uri) {
+        viewModelScope.launch {
+            val bytes = withContext(Dispatchers.IO) {
+                try {
+                    val inputStream: InputStream? = getApplication<Application>().contentResolver.openInputStream(uri)
+                    inputStream?.use { it.readBytes() }
+                } catch (_: Exception) {
+                    null
+                }
+            }
+            if (bytes != null && bytes.isNotEmpty()) {
+                setGuidedSlotPhoto(mode, index, bytes)
+            }
+        }
+    }
+
+    fun requestClearGuidedSlots() {
+        if (guidedSlots(_captureMode.value).any { it.isResolved }) {
+            _showGuidedClearConfirm.value = true
+        }
+    }
+
+    fun clearGuidedSlots() {
+        when (_captureMode.value) {
+            ScanCaptureMode.PANTS -> _pantsSlots.value = GuidedCapturePresets.emptySlots(ScanCaptureMode.PANTS)
+            ScanCaptureMode.JACKET -> _jacketSlots.value = GuidedCapturePresets.emptySlots(ScanCaptureMode.JACKET)
+            ScanCaptureMode.FREE -> Unit
+        }
+        _showGuidedClearConfirm.value = false
+    }
+
+    fun dismissGuidedClearConfirm() {
+        _showGuidedClearConfirm.value = false
+    }
+
+    fun openGuidedCamera(startIndex: Int) {
+        val slotCount = guidedSlots(_captureMode.value).size
+        if (slotCount == 0) return
+        _guidedCameraStartIndex.value = startIndex.coerceIn(0, slotCount - 1)
+        _showGuidedCamera.value = true
+    }
+
+    fun closeGuidedCamera() {
+        _showGuidedCamera.value = false
+    }
+
+    /** Photos actually sent to analysis (and saved to archive) for the active mode. */
+    fun currentAnalysisPhotos(): List<ByteArray> {
+        val mode = _captureMode.value
+        return if (mode.isGuided) {
+            guidedSlots(mode).mapNotNull { it.photo }
+        } else {
+            _photos.value
+        }
+    }
+
     fun addPhotos(newBytes: List<ByteArray>) {
         val current = _photos.value.toMutableList()
         for (b in newBytes) {
@@ -133,7 +238,7 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onStartValuationClicked(hiddenContainer: ViewGroup) {
-        if (_photos.value.isEmpty()) return
+        if (currentAnalysisPhotos().isEmpty()) return
 
         // 1. Check Login: block only on confirmed LOGIN_REQUIRED or explicit logout;
         // UNKNOWN should allow the AIBI engine to reach its safe visible-takeover behavior rather than falsely demanding login.
@@ -184,8 +289,22 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun startRunner(hiddenContainer: ViewGroup) {
         _isSaved.value = false
-        runner.run(_photos.value, hiddenContainer) { result ->
-            _latestResult.value = result
+        val mode = _captureMode.value
+        if (mode.isGuided) {
+            val slots = guidedSlots(mode)
+            val (photos, roles) = GuidedCapturePresets.capturedPhotosWithRoles(mode, slots)
+            runner.run(
+                sourcePhotoBytes = photos,
+                hiddenContainer = hiddenContainer,
+                guidedRoles = roles,
+                guidedPromptText = GuidedCapturePresets.buildGuidedPromptText(mode, slots)
+            ) { result ->
+                _latestResult.value = result
+            }
+        } else {
+            runner.run(_photos.value, hiddenContainer) { result ->
+                _latestResult.value = result
+            }
         }
     }
 
@@ -222,12 +341,14 @@ class ScanViewModel(application: Application) : AndroidViewModel(application) {
                 rawAiResponseJson = result.rawJson
             )
 
-            repository.saveItem(item, _photos.value)
+            repository.saveItem(item, currentAnalysisPhotos())
             _isSaved.value = true
         }
     }
 
     fun setPhotos(newPhotos: List<ByteArray>) {
+        // Deterministic capture states populate the free-mode collector directly.
+        _captureMode.value = ScanCaptureMode.FREE
         _photos.value = newPhotos
     }
 

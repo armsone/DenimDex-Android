@@ -102,6 +102,7 @@ class QuickValueRunner(
 
     private val countdownTracker = QuickValueCountdownTracker()
     private var activeSentRoles: List<String> = emptyList()
+    private var activePromptText: String = ""
 
     val countdownStartTimeMs: Long?
         get() = countdownTracker.countdownStartTimeMs
@@ -109,6 +110,8 @@ class QuickValueRunner(
     fun run(
         sourcePhotoBytes: List<ByteArray>,
         hiddenContainer: ViewGroup,
+        guidedRoles: List<String>? = null,
+        guidedPromptText: String? = null,
         onResult: (QuickValueResult) -> Unit
     ) {
         cancel()
@@ -123,7 +126,12 @@ class QuickValueRunner(
         taskJob = scope.launch {
             try {
             val totalSourceCount = sourcePhotoBytes.size
-            val (selectedPhotos, similarExcluded, limitExcluded) = withContext(Dispatchers.Default) {
+            // Guided pants/jacket runs must preserve slot order with per-slot roles,
+            // so deduplication/limiting is bypassed (max nine curated photos).
+            val isGuidedRun = guidedRoles != null && guidedRoles.size == sourcePhotoBytes.size
+            val (selectedPhotos, similarExcluded, limitExcluded) = if (isGuidedRun) {
+                Triple(sourcePhotoBytes, 0, 0)
+            } else withContext(Dispatchers.Default) {
                 // 1. Deduplicate
                 val deduplicated = PhotoDeduplicator.selectBestPhotos(
                     sourcePhotoBytes,
@@ -139,7 +147,7 @@ class QuickValueRunner(
             }
 
             val sentCount = selectedPhotos.size
-            activeSentRoles = QuickValuePhotoRoles.allRoles(sentCount)
+            activeSentRoles = if (isGuidedRun) guidedRoles!! else QuickValuePhotoRoles.allRoles(sentCount)
 
             // 3. Normalize images
             val attachments = withContext(Dispatchers.Default) {
@@ -158,7 +166,12 @@ class QuickValueRunner(
             }
 
             // 4. Build prompt
-            val promptText = QuickValuePromptBuilder.buildPrompt(sentCount)
+            val promptText = if (isGuidedRun && guidedPromptText != null) {
+                guidedPromptText
+            } else {
+                QuickValuePromptBuilder.buildPrompt(sentCount)
+            }
+            activePromptText = promptText
             val task = AIBITask(
                 id = UUID.randomUUID(),
                 providerId = "chatgpt",
@@ -337,7 +350,7 @@ class QuickValueRunner(
     }
 
     fun manualCopyPrompt(): String {
-        val prompt = QuickValuePromptBuilder.buildPrompt(activeSentRoles.size)
+        val prompt = activePromptText.ifEmpty { QuickValuePromptBuilder.buildPrompt(activeSentRoles.size) }
         aibiSession?.manualCopyPrompt()
         return prompt
     }

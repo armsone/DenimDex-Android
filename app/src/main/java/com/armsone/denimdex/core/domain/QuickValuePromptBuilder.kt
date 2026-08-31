@@ -3,18 +3,65 @@ package com.armsone.denimdex.core.domain
 import com.armsone.denimdex.core.model.QuickValuePhotoRoles
 
 object QuickValuePromptBuilder {
+
+    /** Guided-capture slot descriptor: stable role identifier plus its Korean title. */
+    data class GuidedSlotDescriptor(
+        val role: String,
+        val title: String
+    )
+
     fun buildPrompt(photoCount: Int): String {
         val boundedCount = photoCount.coerceIn(1, QuickValuePhotoRoles.maxCount)
         val photoListString = (1..boundedCount).joinToString("\n") { index ->
             "${index}번 사진: photo_${index}"
         }
+        return buildPromptBody(boundedCount, photoListString, missingSection = null)
+    }
 
+    /**
+     * Prompt for the guided pants/jacket flow: photos are attached in slot order with
+     * their stable roles, and unfilled roles are listed so the model never treats them
+     * as observed evidence.
+     */
+    fun buildGuidedPrompt(
+        sentSlots: List<GuidedSlotDescriptor>,
+        missingSlots: List<GuidedSlotDescriptor>
+    ): String {
+        val boundedSlots = sentSlots.take(QuickValuePhotoRoles.maxCount)
+        val photoListString = boundedSlots
+            .mapIndexed { index, slot -> "${index + 1}번 사진: ${slot.role} (${slot.title})" }
+            .joinToString("\n")
+        val missingSection = if (missingSlots.isEmpty()) null else buildString {
+            appendLine("이번에 사진이 제공되지 않은 부위:")
+            missingSlots.forEach { slot ->
+                appendLine("- ${slot.role} (${slot.title})")
+            }
+            append("위 부위들은 사진이 없으므로 특징을 관찰된 사실처럼 적지 마라. 판단에 꼭 필요하면 caveats나 nextPhotoInstruction에서 언급해라.")
+        }
+        return buildPromptBody(
+            boundedCount = boundedSlots.size,
+            photoListString = photoListString,
+            missingSection = missingSection,
+            exampleRole = boundedSlots.firstOrNull()?.role ?: "photo_1"
+        )
+    }
+
+    private fun buildPromptBody(
+        boundedCount: Int,
+        photoListString: String,
+        missingSection: String?,
+        exampleRole: String = "photo_1"
+    ): String {
         return buildString {
             appendLine("너는 빈티지 데님 감정을 돕는 조사 보조원이다. 첨부된 사진 ${boundedCount}장을 보고 아래 JSON 스키마 하나만 출력해라. 설명 문장, 인사말, 마크다운 제목을 붙이지 말고 JSON 코드 블록 하나만 응답해라.")
             appendLine()
             appendLine("사진 순서와 식별자 (관찰 근거를 적을 때 이 식별자를 evidencePhotoRole에 그대로 사용해라):")
             appendLine(photoListString)
             appendLine()
+            if (missingSection != null) {
+                appendLine(missingSection)
+                appendLine()
+            }
             appendLine("규칙:")
             appendLine("- 이것은 빠른 참고용 추정이며 정품 감정이나 실제 매입가가 아니다. 이 사실을 caveats에 반드시 포함해라.")
             appendLine("- 적정 매입가(fairPurchaseRange)와 예상 판매가(saleRange)를 구분하여 한국(KRW)과 일본(JPY) 두 시장의 범위를 각각 넓게 추정해라. 적정 매입가는 구매자가 지불할 만한 합리적인 가격대이며 예상 판매가보다 낮아야 한다.")
@@ -46,7 +93,7 @@ object QuickValuePromptBuilder {
             appendLine("  \"japanSaleRange\": { \"low\": 0, \"high\": 0 },")
             appendLine("  \"jpyToKrwRate\": 9.1,")
             appendLine("  \"observations\": [")
-            appendLine("    { \"feature\": \"string\", \"value\": \"string\", \"evidencePhotoRole\": \"photo_1\", \"certainty\": \"observed | reported | inferred\" }")
+            appendLine("    { \"feature\": \"string\", \"value\": \"string\", \"evidencePhotoRole\": \"$exampleRole\", \"certainty\": \"observed | reported | inferred\" }")
             appendLine("  ],")
             appendLine("  \"valueReasons\": [\"string\"],")
             appendLine("  \"nextPhotoInstruction\": \"string\",")

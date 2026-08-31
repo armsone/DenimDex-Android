@@ -63,6 +63,30 @@ fun ScanScreen(
     val showCamera by viewModel.showCamera.collectAsState()
     val showPhotoSaveAlert by viewModel.showPhotoSaveAlert.collectAsState()
 
+    val captureMode by viewModel.captureMode.collectAsState()
+    val pantsSlots by viewModel.pantsSlots.collectAsState()
+    val jacketSlots by viewModel.jacketSlots.collectAsState()
+    val showGuidedCamera by viewModel.showGuidedCamera.collectAsState()
+    val guidedCameraStartIndex by viewModel.guidedCameraStartIndex.collectAsState()
+    val showGuidedClearConfirm by viewModel.showGuidedClearConfirm.collectAsState()
+
+    val guidedSlots = when (captureMode) {
+        ScanCaptureMode.PANTS -> pantsSlots
+        ScanCaptureMode.JACKET -> jacketSlots
+        ScanCaptureMode.FREE -> emptyList()
+    }
+    val guidedSteps = GuidedCapturePresets.steps(captureMode)
+    val analysisPhotoCount = if (captureMode.isGuided) {
+        guidedSlots.count { it.isCaptured }
+    } else {
+        photos.size
+    }
+
+    // Full-screen reference enlargement (guided rows and Guide parity)
+    var referencePreviewStep by remember { mutableStateOf<GuidedCaptureStep?>(null) }
+    // Slot awaiting a photo picked from the library
+    var pendingSlotIndex by remember { mutableStateOf<Int?>(null) }
+
     val isVisibleBrowserPresented by viewModel.runner.currentSession?.isVisibleBrowserPresented?.collectAsState()
         ?: remember { mutableStateOf(false) }
 
@@ -92,6 +116,17 @@ fun ScanScreen(
         }
     }
 
+    // Single-photo picker for one guided slot
+    val slotPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
+        val slotIndex = pendingSlotIndex
+        if (uri != null && slotIndex != null && captureMode.isGuided) {
+            viewModel.addGuidedSlotPhotoFromUri(captureMode, slotIndex, uri)
+        }
+        pendingSlotIndex = null
+    }
+
     Box(modifier = modifier.fillMaxSize()) {
         // Hidden WebView container attached behind host
         AndroidView(
@@ -112,12 +147,12 @@ fun ScanScreen(
         val analyzeButtonRequester = remember { BringIntoViewRequester() }
         val runningPanelRequester = remember { BringIntoViewRequester() }
 
-        var previousPhotoCount by remember { mutableIntStateOf(photos.size) }
-        LaunchedEffect(photos.size) {
-            if (photos.size > previousPhotoCount) {
+        var previousPhotoCount by remember { mutableIntStateOf(analysisPhotoCount) }
+        LaunchedEffect(analysisPhotoCount) {
+            if (analysisPhotoCount > previousPhotoCount) {
                 analyzeButtonRequester.bringIntoView()
             }
-            previousPhotoCount = photos.size
+            previousPhotoCount = analysisPhotoCount
         }
 
         val isRunning = runState is QuickValueRunState.Running || runState is QuickValueRunState.Preparing
@@ -139,20 +174,46 @@ fun ScanScreen(
             // 1. Header Card (Archive Header)
             HeaderCard()
 
-            // 2. Photo Collector
-            PhotoCollectorCard(
-                photos = photos,
-                maxCount = 30,
-                hasCamera = hasCamera,
-                onAddFromCamera = { viewModel.openCamera() },
-                onAddFromPicker = {
-                    photoPickerLauncher.launch(
-                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                    )
-                },
-                onRemovePhoto = { index -> viewModel.removePhotoAt(index) },
-                onRequestClearAll = { viewModel.requestClearAllPhotos() }
+            // 2. Capture Mode Selector: 팬츠 / 재킷 / 자유 촬영
+            CaptureModeSelector(
+                selected = captureMode,
+                onSelect = { viewModel.setCaptureMode(it) }
             )
+
+            // 3. Photo Collector (guided nine-slot list or free grid)
+            if (captureMode.isGuided) {
+                GuidedCaptureCollectorCard(
+                    mode = captureMode,
+                    slots = guidedSlots,
+                    onRowCamera = { index -> viewModel.openGuidedCamera(index) },
+                    onRowLibrary = { index ->
+                        pendingSlotIndex = index
+                        slotPickerLauncher.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
+                    },
+                    onShowReference = { step -> referencePreviewStep = step },
+                    onStartGuidedCamera = {
+                        viewModel.openGuidedCamera(GuidedCapturePresets.firstUnresolvedIndex(guidedSlots))
+                    },
+                    onRequestClear = { viewModel.requestClearGuidedSlots() },
+                    hasCamera = hasCamera
+                )
+            } else {
+                PhotoCollectorCard(
+                    photos = photos,
+                    maxCount = 30,
+                    hasCamera = hasCamera,
+                    onAddFromCamera = { viewModel.openCamera() },
+                    onAddFromPicker = {
+                        photoPickerLauncher.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
+                    },
+                    onRemovePhoto = { index -> viewModel.removePhotoAt(index) },
+                    onRequestClearAll = { viewModel.requestClearAllPhotos() }
+                )
+            }
 
             // 3. Execution Action Button
             DenimPrimaryButton(
@@ -162,7 +223,7 @@ fun ScanScreen(
                         viewModel.onStartValuationClicked(container)
                     }
                 },
-                enabled = photos.isNotEmpty() && !isRunning,
+                enabled = analysisPhotoCount > 0 && !isRunning,
                 modifier = Modifier
                     .testTag(DenimTestTags.SCAN_START_BUTTON)
                     .bringIntoViewRequester(analyzeButtonRequester),
@@ -175,9 +236,13 @@ fun ScanScreen(
                 }
             )
 
-            if (photos.isEmpty()) {
+            if (analysisPhotoCount == 0) {
                 Text(
-                    text = "사진 한 장부터 시작할 수 있어요. 원본은 30장까지 담고, 가장 선명한 사진을 골라 분석합니다.",
+                    text = if (captureMode.isGuided) {
+                        "가이드에 따라 아홉 부위를 순서대로 담아보세요. 한 장만 담아도 분석을 시작할 수 있어요."
+                    } else {
+                        "사진 한 장부터 시작할 수 있어요. 원본은 30장까지 담고, 가장 선명한 사진을 골라 분석합니다."
+                    },
                     style = DenimTypography.caption.copy(color = DenimColors.inkSoft),
                     textAlign = TextAlign.Center,
                     modifier = Modifier
@@ -229,7 +294,11 @@ fun ScanScreen(
                     isSaved = isSaved,
                     onSaveToArchive = { viewModel.saveToArchive() },
                     onNextPhotoInstructionClicked = {
-                        viewModel.openCamera()
+                        if (captureMode.isGuided) {
+                            viewModel.openGuidedCamera(GuidedCapturePresets.firstUnresolvedIndex(guidedSlots))
+                        } else {
+                            viewModel.openCamera()
+                        }
                     },
                     onRestart = { viewModel.resetValuation() }
                 )
@@ -253,6 +322,19 @@ fun ScanScreen(
             }
 
             Spacer(modifier = Modifier.height(32.dp))
+        }
+
+        // Guided Camera Overlay
+        if (showGuidedCamera && captureMode.isGuided) {
+            GuidedCameraView(
+                steps = guidedSteps,
+                slots = guidedSlots,
+                startIndex = guidedCameraStartIndex,
+                onCaptured = { index, bytes -> viewModel.setGuidedSlotPhoto(captureMode, index, bytes) },
+                onSkip = { index -> viewModel.skipGuidedSlot(captureMode, index) },
+                onDismiss = { viewModel.closeGuidedCamera() },
+                onPhotoLibrarySaveIssue = { viewModel.onPhotoSaveIssue() }
+            )
         }
 
         // Camera View Overlay
@@ -380,6 +462,48 @@ fun ScanScreen(
             )
         }
 
+        // Guided Mode Clear Confirmation Dialog
+        if (showGuidedClearConfirm) {
+            AlertDialog(
+                onDismissRequest = { viewModel.dismissGuidedClearConfirm() },
+                modifier = Modifier.testTag(DenimTestTags.DIALOG_CLEAR_GUIDED),
+                title = {
+                    Text(
+                        text = "${captureMode.displayName} 촬영을 모두 비울까요?",
+                        style = DenimTypography.title3.copy(color = DenimColors.charcoal)
+                    )
+                },
+                text = {
+                    Text(
+                        text = "현재 모드에 담은 사진과 건너뜀 표시가 모두 초기화됩니다. 사진 앱과 아카이브의 원본은 그대로 유지됩니다.",
+                        style = DenimTypography.body.copy(color = DenimColors.inkSoft)
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = { viewModel.clearGuidedSlots() },
+                        modifier = Modifier.testTag(DenimTestTags.DIALOG_CLEAR_GUIDED_CONFIRM_BUTTON)
+                    ) {
+                        Text(
+                            text = "모두 비우기",
+                            style = DenimTypography.headline.copy(color = DenimColors.signalRed)
+                        )
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = { viewModel.dismissGuidedClearConfirm() },
+                        modifier = Modifier.testTag(DenimTestTags.DIALOG_CLEAR_GUIDED_CANCEL_BUTTON)
+                    ) {
+                        Text(
+                            text = "취소",
+                            style = DenimTypography.body.copy(color = DenimColors.inkSoft)
+                        )
+                    }
+                }
+            )
+        }
+
         // Photo Save Issue Alert
         if (showPhotoSaveAlert) {
             AlertDialog(
@@ -405,6 +529,15 @@ fun ScanScreen(
                         Text("확인", style = DenimTypography.headline.copy(color = DenimColors.indigoBright))
                     }
                 }
+            )
+        }
+
+        // Reference Image Enlargement Overlay (tap anywhere to dismiss)
+        referencePreviewStep?.let { step ->
+            GuidedReferencePreviewOverlay(
+                previewRes = step.previewRes,
+                contentDescription = "${step.title} 참고 이미지 확대",
+                onDismiss = { referencePreviewStep = null }
             )
         }
     }

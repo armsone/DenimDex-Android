@@ -52,6 +52,20 @@ object DenimTestTags {
     const val SCAN_RESULT_SAVE_BUTTON = "scan_result_save_button"
     const val SCAN_RESULT_NEXT_INSTRUCTION_BUTTON = "scan_result_next_instruction_button"
     const val SCAN_RESULT_RESTART_BUTTON = "scan_result_restart_button"
+    // Scan Screen — Guided Capture (팬츠/재킷)
+    const val SCAN_MODE_SELECTOR = "scan_mode_selector"
+    fun scanModeButton(name: String) = "scan_mode_button_$name"
+    const val SCAN_GUIDED_COLLECTOR = "scan_guided_collector"
+    const val SCAN_GUIDED_COUNT_BADGE = "scan_guided_count_badge"
+    const val SCAN_GUIDED_PROGRESS = "scan_guided_progress"
+    const val SCAN_GUIDED_CLEAR_BUTTON = "scan_guided_clear_button"
+    const val SCAN_GUIDED_START_BUTTON = "scan_guided_start_button"
+    fun scanGuidedRow(index: Int) = "scan_guided_row_$index"
+    fun scanGuidedRowThumbnail(index: Int) = "scan_guided_row_thumbnail_$index"
+    fun scanGuidedRowCameraButton(index: Int) = "scan_guided_row_camera_button_$index"
+    fun scanGuidedRowLibraryButton(index: Int) = "scan_guided_row_library_button_$index"
+    const val SCAN_REFERENCE_PREVIEW_OVERLAY = "scan_reference_preview_overlay"
+
     const val SCAN_ERROR_PANEL = "scan_error_panel"
     const val SCAN_ERROR_MESSAGE = "scan_error_message"
     const val SCAN_ERROR_RETRY_BUTTON = "scan_error_retry_button"
@@ -66,6 +80,19 @@ object DenimTestTags {
     const val CAMERA_SWITCH_LENS_BUTTON = "camera_switch_lens_button"
     const val CAMERA_SHUTTER_BUTTON = "camera_shutter_button"
     const val CAMERA_FLASH_BUTTON = "camera_flash_button"
+
+    // Guided Camera Screen
+    const val GUIDED_CAMERA_SCREEN = "guided_camera_screen"
+    const val GUIDED_CAMERA_STEP_COUNT = "guided_camera_step_count"
+    const val GUIDED_CAMERA_STEP_TITLE = "guided_camera_step_title"
+    const val GUIDED_CAMERA_STEP_INSTRUCTION = "guided_camera_step_instruction"
+    const val GUIDED_CAMERA_REFERENCE_IMAGE = "guided_camera_reference_image"
+    const val GUIDED_CAMERA_PREVIOUS_BUTTON = "guided_camera_previous_button"
+    const val GUIDED_CAMERA_SHUTTER_BUTTON = "guided_camera_shutter_button"
+    const val GUIDED_CAMERA_SKIP_BUTTON = "guided_camera_skip_button"
+    const val GUIDED_CAMERA_DONE_BUTTON = "guided_camera_done_button"
+    const val GUIDED_CAMERA_SWITCH_LENS_BUTTON = "guided_camera_switch_lens_button"
+    const val GUIDED_CAMERA_FLASH_BUTTON = "guided_camera_flash_button"
 
     // Archive Screen
     const val ARCHIVE_SCREEN = "archive_screen"
@@ -102,6 +129,8 @@ object DenimTestTags {
     const val GUIDE_SECTION_CONFIDENCE = "guide_section_confidence"
     const val GUIDE_SECTION_VALUE_BASIS = "guide_section_value_basis"
     const val GUIDE_SECTION_DISCLAIMER = "guide_section_disclaimer"
+    const val GUIDE_SECTION_PANTS_STEPS = "guide_section_pants_steps"
+    const val GUIDE_SECTION_JACKET_STEPS = "guide_section_jacket_steps"
 
     // Settings Screen
     const val SETTINGS_SCREEN = "settings_screen"
@@ -125,6 +154,10 @@ object DenimTestTags {
     const val DIALOG_CLEAR_ALL_PHOTOS = "dialog_clear_all_photos"
     const val DIALOG_CLEAR_ALL_CONFIRM_BUTTON = "dialog_clear_all_confirm_button"
     const val DIALOG_CLEAR_ALL_CANCEL_BUTTON = "dialog_clear_all_cancel_button"
+
+    const val DIALOG_CLEAR_GUIDED = "dialog_clear_guided"
+    const val DIALOG_CLEAR_GUIDED_CONFIRM_BUTTON = "dialog_clear_guided_confirm_button"
+    const val DIALOG_CLEAR_GUIDED_CANCEL_BUTTON = "dialog_clear_guided_cancel_button"
 
     const val DIALOG_PHOTO_SAVE_ALERT = "dialog_photo_save_alert"
     const val DIALOG_PHOTO_SAVE_CONFIRM_BUTTON = "dialog_photo_save_confirm_button"
