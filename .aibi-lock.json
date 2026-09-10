@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "repositories": {
+    "denimdex-android": {
+      "version": "0.5.0",
+      "files": {
+        "app/src/main/assets/aibi-browser-runtime.js": {
+          "sha256": "d460657527f3dc2a0c64eb8f272941b5eea4a17c31de1bb649dcd85f07599790",
+          "source": "packages/runtime/aibi-browser-runtime.js"
+        },
+        "app/src/main/assets/aibi-providers.json": {
+          "sha256": "66abea20a7a8461a3a6780925313bd1b43ab2f0b47311622f1afd4d6dda0b186",
+          "source": "packages/providers/aibi-providers.json"
+        },
+        "app/src/main/java/com/armsone/denimdex/core/aibi/AIBIEngine.kt": {
+          "sha256": "5472958db21182851e5bdbd4db768d5d2a5c0791d4e8290ae73cd8b517bf7c6f",
+          "source": "profiles/denimdex/distribution/android/AIBIEngine.kt"
+        },
+        "app/src/main/java/com/armsone/denimdex/core/aibi/AIBIDiagnosticsStore.kt": {
+          "sha256": "488621e02b4851ac8525975d58131f2399ad01f46a15ec6be39c66f14f8d3b9d",
+          "source": "profiles/denimdex/distribution/android/AIBIDiagnosticsStore.kt"
+        }
+      }
+    }
+  },
+  "consumer": "denimdex",
+  "aibiVersion": "0.5.0"
+}

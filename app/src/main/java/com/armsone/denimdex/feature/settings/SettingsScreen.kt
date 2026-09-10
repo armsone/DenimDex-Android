@@ -16,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -30,12 +31,22 @@ fun SettingsScreen(
     viewModel: SettingsViewModel,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val loginStatus by viewModel.loginStatus.collectAsState()
     val showLoginSheet by viewModel.showLoginSheet.collectAsState()
     val showClearSessionConfirm by viewModel.showClearSessionConfirm.collectAsState()
     val showSessionClearedAlert by viewModel.showSessionClearedAlert.collectAsState()
     val showClearArchiveConfirm by viewModel.showClearArchiveConfirm.collectAsState()
     val archiveCount by viewModel.archiveCount.collectAsState()
+    val diagnosticsShareIntent by viewModel.diagnosticsShareIntent.collectAsState()
+    val diagnosticsMessage by viewModel.diagnosticsMessage.collectAsState()
+
+    LaunchedEffect(diagnosticsShareIntent) {
+        diagnosticsShareIntent?.let { intent ->
+            context.startActivity(intent)
+            viewModel.onDiagnosticsShareConsumed()
+        }
+    }
 
     Box(modifier = modifier.fillMaxSize()) {
         // A real attached reference viewport is required for ChatGPT's mobile SPA to hydrate
@@ -174,6 +185,22 @@ fun SettingsScreen(
                 )
             }
 
+            // Section: Diagnostics
+            SettingsSection(title = "진단 로그") {
+                Text(
+                    text = "ChatGPT 자동화 실행 중 문제가 발생한 경우, 최근 실행 진단 로그를 공유하여 원인을 분석할 수 있습니다. 개인 식별 정보나 계정 암호는 포함되지 않습니다.",
+                    style = DenimTypography.caption.copy(color = DenimColors.inkSoft)
+                )
+                OutlinedButton(
+                    onClick = { viewModel.shareLatestDiagnostics() },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(imageVector = Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("최근 진단 로그 공유")
+                }
+            }
+
             // Section: Archive management
             SettingsSection(title = "아카이브 관리") {
                 OutlinedButton(
@@ -301,6 +328,29 @@ fun SettingsScreen(
                         modifier = Modifier.testTag(DenimTestTags.DIALOG_CLEAR_ARCHIVE_CANCEL_BUTTON)
                     ) {
                         Text("취소", style = DenimTypography.body.copy(color = DenimColors.inkSoft))
+                    }
+                }
+            )
+        }
+
+        if (diagnosticsMessage != null) {
+            AlertDialog(
+                onDismissRequest = { viewModel.dismissDiagnosticsMessage() },
+                title = {
+                    Text(
+                        text = "진단 로그",
+                        style = DenimTypography.title3.copy(color = DenimColors.charcoal)
+                    )
+                },
+                text = {
+                    Text(
+                        text = diagnosticsMessage ?: "",
+                        style = DenimTypography.body.copy(color = DenimColors.inkSoft)
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.dismissDiagnosticsMessage() }) {
+                        Text("확인", style = DenimTypography.headline.copy(color = DenimColors.indigoBright))
                     }
                 }
             )

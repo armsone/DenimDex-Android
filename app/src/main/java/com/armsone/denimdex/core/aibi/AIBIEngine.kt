@@ -7,6 +7,7 @@ import android.content.Context
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.*
@@ -23,7 +24,8 @@ class AIBISession(
     private val context: Context,
     private val runtimeJavaScript: String,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Main + SupervisorJob()),
-    val timingProfile: AIBITimingProfile = AIBITimingProfile.default
+    val timingProfile: AIBITimingProfile = AIBITimingProfile.default,
+    val diagnosticsStore: AIBIDiagnosticsStore = AIBIDiagnosticsStore.getInstance(context)
 ) {
     private val _currentPhase = MutableStateFlow(AIBIPhase.IDLE)
     val currentPhase: StateFlow<AIBIPhase> = _currentPhase.asStateFlow()
@@ -62,8 +64,8 @@ class AIBISession(
     private var consecutiveMisses = 0
     private var submitAttemptCount = 0
     private var baselineAssistantCount = 0
-    private var baselineUserCount = 0
-    private var baselineUrl = ""
+    private var baselineAttachmentCount = 0
+    private var currentRunId: String? = null
     private var stabilityText: String? = null
     private var stabilityTickCount = 0
 
@@ -74,6 +76,59 @@ class AIBISession(
     private fun configureCookieManager() {
         val cookieManager = CookieManager.getInstance()
         cookieManager.setAcceptCookie(true)
+    }
+
+    private fun recordDiagnostic(stage: String, metrics: Map<String, Int> = emptyMap()) {
+        val runId = currentRunId ?: return
+        diagnosticsStore.record(runId, stage, metrics)
+    }
+
+    private suspend fun drainRuntimeDiagnostics() {
+        val runId = currentRunId ?: return
+        val config = activeConfig ?: return
+        val webView = activeWebView ?: return
+        val configJsonStr = buildConfigJsonString(config)
+        val drainScript = "window.__AIBI_RUNTIME__ && window.__AIBI_RUNTIME__.drainDiagnostics ? window.__AIBI_RUNTIME__.drainDiagnostics($configJsonStr) : null"
+        val rawResult = evaluateScript(webView, drainScript) ?: return
+        parseAndRecordDiagnostics(runId, rawResult)
+    }
+
+    private fun drainActiveWebViewDiagnostics() {
+        val runId = currentRunId ?: return
+        val config = activeConfig ?: return
+        val webView = activeWebView ?: return
+        try {
+            val configJsonStr = buildConfigJsonString(config)
+            val drainScript = "window.__AIBI_RUNTIME__ && window.__AIBI_RUNTIME__.drainDiagnostics ? window.__AIBI_RUNTIME__.drainDiagnostics($configJsonStr) : null"
+            webView.evaluateJavascript(drainScript) { raw ->
+                if (raw != null && raw != "null") {
+                    parseAndRecordDiagnostics(runId, raw)
+                }
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun parseAndRecordDiagnostics(runId: String, rawJson: String) {
+        try {
+            val json = JSONObject(rawJson)
+            if (!json.optBoolean("success", false)) return
+            val data = json.optJSONObject("data") ?: return
+            val eventsArray = data.optJSONArray("events") ?: return
+            for (i in 0 until eventsArray.length()) {
+                val eventObj = eventsArray.optJSONObject(i) ?: continue
+                val stage = eventObj.optString("stage")
+                val metricsObj = eventObj.optJSONObject("metrics")
+                val metricsMap = mutableMapOf<String, Int>()
+                if (metricsObj != null) {
+                    val keys = metricsObj.keys()
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        metricsMap[key] = metricsObj.optInt(key)
+                    }
+                }
+                diagnosticsStore.record(runId, stage, metricsMap)
+            }
+        } catch (_: Exception) {}
     }
 
     fun startTask(task: AIBITask, providerConfig: AIBIProviderConfig, parentViewGroup: ViewGroup? = null) {
@@ -87,10 +142,16 @@ class AIBISession(
         _lastErrorMessage.value = null
         _pendingResult.value = null
 
+        val runId = diagnosticsStore.start(task.providerId)
+        currentRunId = runId
+        recordDiagnostic("run_started", mapOf("expected_count" to task.attachments.size))
+
         if (task.attachments.size > 20 ||
             (task.attachments.isNotEmpty() &&
                 (!providerConfig.mediaCapabilities.supportsImages ||
                     task.attachments.size > providerConfig.mediaCapabilities.maxImagesPerTask))) {
+            recordDiagnostic("media_preparation_failed", mapOf("failed_count" to task.attachments.size))
+            recordDiagnostic("run_failed")
             failWithError("Image attachments are not supported for this task.")
             return
         }
@@ -100,19 +161,29 @@ class AIBISession(
 
         val currentGen = generationId
         scope.launch {
+            if (!isActive || generationId != currentGen) return@launch
+            if (task.attachments.isNotEmpty()) {
+                recordDiagnostic("media_preparation_started", mapOf("expected_count" to task.attachments.size))
+            }
             val prepared = try {
                 withContext(Dispatchers.IO) {
+                    if (!isActive || generationId != currentGen) return@withContext null to emptyList<Uri>()
                     prepareNativeAttachmentBatch(task.attachments)
                 }
             } catch (_: Exception) {
                 if (generationId == currentGen) {
+                    recordDiagnostic("media_preparation_failed", mapOf("failed_count" to task.attachments.size))
+                    recordDiagnostic("run_failed")
                     failWithError("Could not prepare image attachments.")
                 }
                 return@launch
             }
-            if (generationId != currentGen) {
+            if (!isActive || generationId != currentGen) {
                 prepared.first?.deleteRecursively()
                 return@launch
+            }
+            if (task.attachments.isNotEmpty()) {
+                recordDiagnostic("media_prepared", mapOf("prepared_count" to prepared.second.size))
             }
             nativeAttachmentDirectory = prepared.first
             nativeAttachmentUris = prepared.second
@@ -154,6 +225,8 @@ class AIBISession(
     }
 
     fun cancelCurrentTask() {
+        drainActiveWebViewDiagnostics()
+        recordDiagnostic("run_cancelled")
         stopAllJobs()
         generationId++
         if (_currentPhase.value != AIBIPhase.IDLE) {
@@ -164,6 +237,8 @@ class AIBISession(
     }
 
     fun fullReset() {
+        drainActiveWebViewDiagnostics()
+        recordDiagnostic("run_cancelled")
         stopAllJobs()
         generationId++
         activeTask = null
@@ -171,6 +246,7 @@ class AIBISession(
         _activeProviderId.value = null
         _pendingResult.value = null
         _lastErrorMessage.value = null
+        currentRunId = null
         destroyHiddenBrowser()
         destroyVisibleBrowser()
         disposeNativeAttachmentBatch()
@@ -219,6 +295,7 @@ class AIBISession(
         activeJob = scope.launch {
             while (isActive && generationId == generation) {
                 if (System.currentTimeMillis() - startTime > timingProfile.readinessTimeoutMs) {
+                    recordDiagnostic("bridge_failed")
                     escalateToVisible(AIBIFallbackReason.READINESS_TIMEOUT)
                     break
                 }
@@ -237,7 +314,7 @@ class AIBISession(
         val configJsonStr = buildConfigJsonString(config)
         val script = "window.__AIBI_RUNTIME__.checkReadiness($configJsonStr)"
         val rawResult = evaluateScript(webView, script) ?: return
-        if (generationId != generation) return
+        if (!currentCoroutineContext().isActive || generationId != generation) return
 
         try {
             val json = JSONObject(rawResult)
@@ -250,29 +327,35 @@ class AIBISession(
             val reason = data.optString("reason")
 
             if (!isLoggedIn) {
+                recordDiagnostic("manual_takeover")
                 activeJob?.cancel()
                 escalateToVisible(AIBIFallbackReason.AUTH_REQUIRED)
                 return
             }
 
             if (hasChallenge) {
+                recordDiagnostic("manual_takeover")
                 activeJob?.cancel()
                 escalateToVisible(AIBIFallbackReason.SECURITY_CHALLENGE_PRESENTED)
                 return
             }
 
             if (isReady) {
+                recordDiagnostic("bridge_ready")
+                recordDiagnostic("composer_found", mapOf("composer_present" to 1))
                 activeJob?.cancel()
                 recordBaselineAndInject(generation)
             } else if (reason == "INPUT_NOT_FOUND") {
+                recordDiagnostic("composer_missing", mapOf("composer_present" to 0))
                 consecutiveMisses++
                 if (consecutiveMisses >= timingProfile.maxReadinessMisses) {
+                    recordDiagnostic("bridge_failed")
                     activeJob?.cancel()
                     escalateToVisible(AIBIFallbackReason.INPUT_NOT_FOUND)
                 }
             }
         } catch (_: Exception) {
-            // Continue until deadline
+            // Silently continue until deadline
         }
     }
 
@@ -283,27 +366,33 @@ class AIBISession(
         updatePhase(AIBIPhase.INJECTING_PROMPT, "Preparing prompt...")
 
         scope.launch {
+            if (!isActive || generationId != generation) return@launch
             val configJsonStr = buildConfigJsonString(config)
 
-            // Baseline
+            // Baseline assistant count
             val baselineScript = "window.__AIBI_RUNTIME__.getBaselineState($configJsonStr)"
             val baselineResult = evaluateScript(webView, baselineScript)
+            if (!isActive || generationId != generation) return@launch
             if (baselineResult != null) {
                 try {
                     val json = JSONObject(baselineResult)
                     val data = json.optJSONObject("data")
                     baselineAssistantCount = data?.optInt("assistantCount", 0) ?: 0
-                    baselineUserCount = data?.optInt("userCount", 0) ?: 0
-                    baselineUrl = data?.optString("currentUrl", "") ?: ""
                 } catch (_: Exception) {}
             }
+
+            // Baseline attachment count
+            val stateScript = "window.__AIBI_RUNTIME__.getAttachmentState($configJsonStr)"
+            val stateResult = evaluateScript(webView, stateScript)
+            if (!isActive || generationId != generation) return@launch
+            baselineAttachmentCount = parseAttachmentPreviewCount(stateResult) ?: 0
 
             if (task.attachments.isNotEmpty() && !attachImagesAtomically(webView, config, task, generation)) {
                 if (generationId == generation) escalateToVisible(AIBIFallbackReason.ATTACHMENT_FAILED)
                 return@launch
             }
 
-            if (generationId != generation) return@launch
+            if (!isActive || generationId != generation) return@launch
 
             // Bounded prompt injection & persistence verification loop
             val escapedPrompt = JSONObject.quote(task.promptText)
@@ -313,10 +402,10 @@ class AIBISession(
             var attempt = 1
             var injectionSucceeded = false
 
-            while (attempt <= maxAttempts && generationId == generation) {
+            while (attempt <= maxAttempts && isActive && generationId == generation) {
                 val injectScript = "window.__AIBI_RUNTIME__.injectPrompt($configJsonStr, $escapedPrompt, ${task.forceFill})"
                 val rawInjectResult = evaluateScript(webView, injectScript)
-                if (generationId != generation) return@launch
+                if (!isActive || generationId != generation) return@launch
 
                 val injectResult = AIBIPromptInjectionClassifier.parseInjectionResult(rawInjectResult)
 
@@ -329,7 +418,7 @@ class AIBISession(
                 val verifyResult = if (injectResult.isSuccess) {
                     val verifyScript = "window.__AIBI_RUNTIME__.verifyPromptInjected($configJsonStr, $escapedPrompt)"
                     val rawVerifyResult = evaluateScript(webView, verifyScript)
-                    if (generationId != generation) return@launch
+                    if (!isActive || generationId != generation) return@launch
                     AIBIPromptInjectionClassifier.parseVerifyResult(rawVerifyResult)
                 } else {
                     null
@@ -343,16 +432,18 @@ class AIBISession(
 
                 if (attempt < maxAttempts) {
                     delay(retryDelayMs)
-                    if (generationId != generation) return@launch
+                    if (!isActive || generationId != generation) return@launch
                 }
                 attempt++
             }
 
-            if (generationId != generation) return@launch
+            if (!isActive || generationId != generation) return@launch
 
             if (injectionSucceeded) {
+                recordDiagnostic("prompt_inserted", mapOf("prompt_length" to task.promptText.length, "prompt_present" to 1))
                 startSubmissionLoop(generation)
             } else {
+                recordDiagnostic("prompt_failed")
                 escalateToVisible(AIBIFallbackReason.INPUT_NOT_FOUND)
             }
         }
@@ -368,50 +459,69 @@ class AIBISession(
         val configJsonStr = buildConfigJsonString(config)
         val stateScript = "window.__AIBI_RUNTIME__.getAttachmentState($configJsonStr)"
         val baseline = parseAttachmentPreviewCount(evaluateScript(webView, stateScript)) ?: 0
+        if (!currentCoroutineContext().isActive || generationId != generation) return false
         val expectedTotal = baseline + task.attachments.size
         nativeAttachmentNextSingleIndex = 0
+
+        recordDiagnostic("attachment_started", mapOf("expected_count" to task.attachments.size, "preview_count" to baseline))
 
         val prepareScript = "window.__AIBI_RUNTIME__.prepareAttachmentInput($configJsonStr)"
         evaluateScript(webView, prepareScript)
         delay(700L)
-        if (generationId != generation) return false
+        if (!currentCoroutineContext().isActive || generationId != generation) return false
 
         var observedCount = baseline
         val nativeOverallDeadline = System.currentTimeMillis() + timingProfile.attachmentTimeoutMs
-        while (generationId == generation && observedCount < expectedTotal &&
+        while (currentCoroutineContext().isActive && generationId == generation && observedCount < expectedTotal &&
             System.currentTimeMillis() < nativeOverallDeadline) {
             val panelResult = evaluateScript(
                 webView,
                 "window.__AIBI_RUNTIME__.openAttachmentPanel($configJsonStr)"
             )
+            if (!currentCoroutineContext().isActive || generationId != generation) return false
             if (panelResult == null || !parseRuntimeSuccess(panelResult)) {
                 delay(timingProfile.attachmentCadenceMs)
                 continue
             }
             val previousCount = observedCount
-            val nativePreviewWaitMs = 6_000L
+            val nativePreviewWaitMs = if (config.id == "gemini") 20_000L else 6_000L
             val nativeStepDeadline = minOf(
                 nativeOverallDeadline,
                 System.currentTimeMillis() + nativePreviewWaitMs
             )
-            while (generationId == generation && System.currentTimeMillis() < nativeStepDeadline) {
+            while (currentCoroutineContext().isActive && generationId == generation && System.currentTimeMillis() < nativeStepDeadline) {
                 observedCount = parseAttachmentPreviewCount(evaluateScript(webView, stateScript)) ?: 0
-                if (observedCount == expectedTotal) return true
-                if (observedCount > previousCount) break
+                if (!currentCoroutineContext().isActive || generationId != generation) return false
+                if (observedCount == expectedTotal) {
+                    recordDiagnostic("attachment_ready", mapOf("attached_count" to task.attachments.size, "preview_count" to observedCount))
+                    return true
+                }
+                if (observedCount > previousCount) {
+                    recordDiagnostic("attachment_progress", mapOf("preview_count" to observedCount))
+                    break
+                }
                 delay(timingProfile.attachmentCadenceMs)
             }
             if (observedCount <= previousCount) break
         }
 
-        // Bounded DataTransfer fallback
+        if (!currentCoroutineContext().isActive || generationId != generation) return false
+
         val ordered = task.attachments.sortedBy { it.sourceIndex }
         val beginResult = evaluateScript(
             webView,
             "window.__AIBI_RUNTIME__.beginAttachmentBatch($configJsonStr, ${ordered.size})"
         ) ?: return false
-        if (!parseRuntimeSuccess(beginResult)) return false
-
+        if (!currentCoroutineContext().isActive || generationId != generation) return false
+        if (!parseRuntimeSuccess(beginResult)) {
+            recordDiagnostic("attachment_failed", mapOf("expected_count" to expectedTotal, "attached_count" to observedCount))
+            return false
+        }
         ordered.forEachIndexed { index, attachment ->
+            if (!currentCoroutineContext().isActive || generationId != generation) {
+                evaluateScript(webView, "window.__AIBI_RUNTIME__.clearAttachmentBatch()")
+                return false
+            }
             val imageJson = JSONObject(mapOf(
                 "dataUrl" to attachment.dataUrl(),
                 "mimeType" to attachment.mimeType,
@@ -421,8 +531,13 @@ class AIBISession(
                 webView,
                 "window.__AIBI_RUNTIME__.stageAttachment($imageJson, $index)"
             )
+            if (!currentCoroutineContext().isActive || generationId != generation) {
+                evaluateScript(webView, "window.__AIBI_RUNTIME__.clearAttachmentBatch()")
+                return false
+            }
             if (staged == null || !parseRuntimeSuccess(staged)) {
                 evaluateScript(webView, "window.__AIBI_RUNTIME__.clearAttachmentBatch()")
+                recordDiagnostic("attachment_failed", mapOf("expected_count" to expectedTotal, "attached_count" to observedCount))
                 return false
             }
         }
@@ -430,14 +545,23 @@ class AIBISession(
             webView,
             "window.__AIBI_RUNTIME__.commitAttachmentBatch($configJsonStr)"
         ) ?: return false
-        if (!parseRuntimeSuccess(attachResult)) return false
+        if (!currentCoroutineContext().isActive || generationId != generation) return false
+        if (!parseRuntimeSuccess(attachResult)) {
+            recordDiagnostic("attachment_failed", mapOf("expected_count" to expectedTotal, "attached_count" to observedCount))
+            return false
+        }
 
         val deadline = System.currentTimeMillis() + timingProfile.attachmentTimeoutMs
-        while (generationId == generation && System.currentTimeMillis() < deadline) {
+        while (currentCoroutineContext().isActive && generationId == generation && System.currentTimeMillis() < deadline) {
             val previewCount = parseAttachmentPreviewCount(evaluateScript(webView, stateScript)) ?: 0
-            if (previewCount == baseline + task.attachments.size) return true
+            if (!currentCoroutineContext().isActive || generationId != generation) return false
+            if (previewCount == baseline + task.attachments.size) {
+                recordDiagnostic("attachment_ready", mapOf("attached_count" to task.attachments.size, "preview_count" to previewCount))
+                return true
+            }
             delay(timingProfile.attachmentCadenceMs)
         }
+        recordDiagnostic("attachment_timeout", mapOf("expected_count" to expectedTotal, "attached_count" to observedCount))
         return false
     }
 
@@ -455,51 +579,104 @@ class AIBISession(
 
     private fun startSubmissionLoop(generation: Long) {
         activeJob?.cancel()
-        submitAttemptCount = 1
-        val startTime = System.currentTimeMillis()
+        submitAttemptCount = 0
+        val readinessDeadline = SystemClock.elapsedRealtime() + 15_000L
         updatePhase(AIBIPhase.SUBMITTING, "Sending prompt...")
 
         activeJob = scope.launch {
+            if (!isActive || generationId != generation) return@launch
+
+            val config = activeConfig ?: return@launch
+            val webView = activeWebView ?: return@launch
+            val task = activeTask ?: return@launch
+            val configJsonStr = buildConfigJsonString(config)
+
+            // Retry readiness only until the runtime confirms a dispatch.
+            var dispatched = false
+            while (isActive && generationId == generation && SystemClock.elapsedRealtime() < readinessDeadline) {
+                val stateScript = "window.__AIBI_RUNTIME__.getAttachmentState($configJsonStr)"
+                val currentAttachments = parseAttachmentPreviewCount(evaluateScript(webView, stateScript))
+                if (!isActive || generationId != generation) return@launch
+                val expectedAttachments = baselineAttachmentCount + task.attachments.size
+                if (currentAttachments != expectedAttachments) {
+                    recordDiagnostic("send_blocked", mapOf(
+                        "attached_count" to (currentAttachments ?: -1),
+                        "expected_count" to expectedAttachments
+                    ))
+                    drainRuntimeDiagnostics()
+                    if (!isActive || generationId != generation) return@launch
+                    failWithError("Submission blocked: Attachment count does not match before send. Please export and share diagnostic logs from Settings.")
+                    return@launch
+                }
+
+                if (SystemClock.elapsedRealtime() >= readinessDeadline) break
+                submitAttemptCount++
+                val submitScript = "window.__AIBI_RUNTIME__.submitPrompt($configJsonStr, $submitAttemptCount)"
+                val submitResult = evaluateScript(webView, submitScript)
+                if (!isActive || generationId != generation) return@launch
+                val reply = try { submitResult?.let { JSONObject(it) } } catch (_: Exception) { null }
+                dispatched = reply?.optJSONObject("data")?.opt("attempted") == true
+                drainRuntimeDiagnostics()
+                if (!isActive || generationId != generation) return@launch
+                if (dispatched) break
+                if (reply?.optString("code") != "SEND_NOT_READY") {
+                    recordDiagnostic("send_blocked")
+                    failWithError("Submission could not be confirmed. Please export and share diagnostic logs from Settings.")
+                    return@launch
+                }
+                val remaining = readinessDeadline - SystemClock.elapsedRealtime()
+                if (remaining > 0) delay(minOf(timingProfile.submitCadenceMs.coerceAtLeast(1L), remaining))
+            }
+
+            if (!isActive || generationId != generation) return@launch
+            if (!dispatched) {
+                recordDiagnostic("send_timeout", mapOf("attempt" to submitAttemptCount))
+                failWithError("Submission readiness timed out. Please export and share diagnostic logs from Settings.")
+                return@launch
+            }
+
+            recordDiagnostic("send_ready", mapOf("attachment_verified" to 1))
+            val startTime = SystemClock.elapsedRealtime()
+
+            // Verification loop: repeats return pending with no click/refill
             while (isActive && generationId == generation) {
-                if (System.currentTimeMillis() - startTime > timingProfile.submitTimeoutMs) {
-                    escalateToVisible(AIBIFallbackReason.INPUT_NOT_FOUND)
+                val elapsed = SystemClock.elapsedRealtime() - startTime
+                if (elapsed > timingProfile.submitTimeoutMs) {
+                    recordDiagnostic("send_timeout", mapOf("attempt" to submitAttemptCount))
+                    drainRuntimeDiagnostics()
+                    if (!isActive || generationId != generation) return@launch
+                    failWithError("Submission pending verification timed out. Please export and share diagnostic logs from Settings.")
                     break
                 }
 
-                performSubmitAttempt(generation)
-                delay(timingProfile.submitCadenceMs + timingProfile.submitVerificationDelayMs)
+                delay(timingProfile.submitVerificationDelayMs)
+                if (!isActive || generationId != generation) return@launch
+
+                val verifyScript = "window.__AIBI_RUNTIME__.verifySubmission($configJsonStr, $baselineAssistantCount)"
+                val verifyResult = evaluateScript(webView, verifyScript)
+                if (!isActive || generationId != generation) return@launch
+
+                drainRuntimeDiagnostics()
+                if (!isActive || generationId != generation) return@launch
+
+                if (verifyResult != null) {
+                    try {
+                        val json = JSONObject(verifyResult)
+                        val data = json.optJSONObject("data")
+                        if (data?.optBoolean("submitted", false) == true) {
+                            recordDiagnostic("send_observed")
+                            recordDiagnostic("generation_started", mapOf("generation_active" to 1))
+                            activeJob?.cancel()
+                            startObservationLoop(generation)
+                            return@launch
+                        }
+                    } catch (_: Exception) {}
+                }
+
+                delay(timingProfile.submitCadenceMs)
+                if (!isActive || generationId != generation) return@launch
             }
         }
-    }
-
-    private suspend fun performSubmitAttempt(generation: Long) {
-        val config = activeConfig ?: return
-        val webView = activeWebView ?: return
-        val configJsonStr = buildConfigJsonString(config)
-
-        val submitScript = "window.__AIBI_RUNTIME__.submitPrompt($configJsonStr, $submitAttemptCount)"
-        evaluateScript(webView, submitScript)
-        if (generationId != generation) return
-
-        delay(timingProfile.submitVerificationDelayMs)
-        if (generationId != generation) return
-
-        val verifyScript = "window.__AIBI_RUNTIME__.verifySubmission(" +
-            "$configJsonStr, $baselineAssistantCount, $baselineUserCount, ${JSONObject.quote(baselineUrl)})"
-        val verifyResult = evaluateScript(webView, verifyScript)
-        if (verifyResult != null) {
-            try {
-                val json = JSONObject(verifyResult)
-                val data = json.optJSONObject("data")
-                if (data?.optBoolean("submitted", false) == true) {
-                    activeJob?.cancel()
-                    startObservationLoop(generation)
-                    return
-                }
-            } catch (_: Exception) {}
-        }
-
-        submitAttemptCount++
     }
 
     private fun startObservationLoop(generation: Long) {
@@ -522,9 +699,11 @@ class AIBISession(
         val task = activeTask ?: return
         val configJsonStr = buildConfigJsonString(config)
 
+        drainRuntimeDiagnostics()
+
         val script = "window.__AIBI_RUNTIME__.observeGeneration($configJsonStr, $baselineAssistantCount)"
         val result = evaluateScript(webView, script) ?: return
-        if (generationId != generation) return
+        if (!currentCoroutineContext().isActive || generationId != generation) return
 
         try {
             val json = JSONObject(result)
@@ -538,12 +717,16 @@ class AIBISession(
             val errorMessage = data.optString("errorMessage").takeIf { it.isNotEmpty() && it != "null" }
 
             if (phaseStr == "FAILED" && !errorMessage.isNullOrEmpty()) {
+                recordDiagnostic("generation_failed")
+                drainRuntimeDiagnostics()
                 activeJob?.cancel()
                 failWithError(errorMessage)
                 return
             }
 
             if (phaseStr == "FALLBACK_REQUIRED") {
+                recordDiagnostic("manual_takeover")
+                drainRuntimeDiagnostics()
                 activeJob?.cancel()
                 escalateToVisible(AIBIFallbackReason.SECURITY_CHALLENGE_PRESENTED)
                 return
@@ -552,15 +735,12 @@ class AIBISession(
             if (hasNewAnswer && !isGenerating && rawText.trim().isNotEmpty()) {
                 if (stabilityText != null && stabilityText == rawText) {
                     stabilityTickCount++
-                    // stabilityRequiredTicks = 2 means 3 matching consecutive ticks
                     if (stabilityTickCount >= timingProfile.stabilityRequiredTicks) {
-                        // Do not cancel the observation job here: this function is
-                        // running inside that job and still needs to suspend while
-                        // cleaning and committing the result. completeWithResult()
-                        // owns cancellation after the handoff succeeds.
+                        recordDiagnostic("generation_completed", mapOf("response_length" to rawText.length))
                         val cleanScript = "window.__AIBI_RUNTIME__.cleanOutput(${JSONObject.quote(rawText)}, '${task.providerId}')"
                         var cleaned = rawText
                         val cleanResult = evaluateScript(webView, cleanScript)
+                        if (!currentCoroutineContext().isActive || generationId != generation) return
                         if (cleanResult != null) {
                             try {
                                 val cleanJson = JSONObject(cleanResult)
@@ -568,6 +748,9 @@ class AIBISession(
                                 cleaned = cleanData?.optString("cleanedText", rawText) ?: rawText
                             } catch (_: Exception) {}
                         }
+
+                        drainRuntimeDiagnostics()
+                        if (!currentCoroutineContext().isActive || generationId != generation) return
 
                         val finalResult = AIBIResult(
                             taskId = task.id,
@@ -581,9 +764,13 @@ class AIBISession(
                 } else {
                     stabilityText = rawText
                     stabilityTickCount = 0
+                    recordDiagnostic("generation_progress", mapOf("response_length" to rawText.length))
                     updatePhase(AIBIPhase.STABILIZING, "Receiving answer...", isWaiting = true)
                 }
             } else {
+                if (isGenerating && rawText.isNotEmpty()) {
+                    recordDiagnostic("generation_progress", mapOf("response_length" to rawText.length))
+                }
                 stabilityText = null
                 stabilityTickCount = 0
                 updatePhase(AIBIPhase.GENERATING, "Waiting for answer...", isWaiting = true)
@@ -592,6 +779,7 @@ class AIBISession(
     }
 
     private fun completeWithResult(result: AIBIResult) {
+        drainActiveWebViewDiagnostics()
         stopAllJobs()
         _pendingResult.value = result
 
@@ -603,15 +791,21 @@ class AIBISession(
         if (sink != null) {
             val commitOutcome = sink.commitResult(result)
             if (commitOutcome.isSuccess) {
+                recordDiagnostic("result_applied", mapOf("response_length" to result.cleanedText.length))
+                recordDiagnostic("run_completed")
                 updatePhase(AIBIPhase.COMPLETED, "Import completed")
                 dismissVisibleBrowser()
                 destroyHiddenBrowser()
                 disposeNativeAttachmentBatch()
             } else {
                 val err = commitOutcome.exceptionOrNull()?.message ?: "Validation error"
+                recordDiagnostic("response_rejected", mapOf("response_length" to result.cleanedText.length))
+                recordDiagnostic("run_failed")
                 updatePhase(AIBIPhase.FAILED, "Host import validation failed: $err")
             }
         } else {
+            recordDiagnostic("result_applied", mapOf("response_length" to result.cleanedText.length))
+            recordDiagnostic("run_completed")
             updatePhase(AIBIPhase.COMPLETED, "Result ready")
             dismissVisibleBrowser()
             destroyHiddenBrowser()
@@ -620,6 +814,8 @@ class AIBISession(
     }
 
     private fun failWithError(message: String) {
+        drainActiveWebViewDiagnostics()
+        recordDiagnostic("run_failed")
         stopAllJobs()
         _lastErrorMessage.value = message
         updatePhase(AIBIPhase.FAILED, message)
@@ -628,6 +824,8 @@ class AIBISession(
     }
 
     private fun escalateToVisible(reason: AIBIFallbackReason) {
+        drainActiveWebViewDiagnostics()
+        recordDiagnostic("manual_takeover")
         stopAllJobs()
         updatePhase(AIBIPhase.FALLBACK_REQUIRED, "Opening browser for required action...")
 
@@ -638,7 +836,7 @@ class AIBISession(
         visibleWebView?.loadUrl(config.initialUrl)
     }
 
-    private val activeWebView: WebView?
+    val activeWebView: WebView?
         get() = if (_isVisibleBrowserPresented.value) visibleWebView else hiddenWebView
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -735,7 +933,11 @@ class AIBISession(
             fileChooserParams: FileChooserParams?
         ): Boolean {
             val callback = filePathCallback ?: return false
-            if (nativeAttachmentUris.isEmpty()) return false
+            if (activeTask == null || nativeAttachmentUris.isEmpty()) {
+                callback.onReceiveValue(null)
+                return false
+            }
+            recordDiagnostic("attachment_dispatched", mapOf("attached_count" to nativeAttachmentUris.size))
             if (fileChooserParams?.mode == FileChooserParams.MODE_OPEN_MULTIPLE) {
                 nativeAttachmentNextSingleIndex = nativeAttachmentUris.size
                 callback.onReceiveValue(nativeAttachmentUris.toTypedArray())
@@ -847,14 +1049,18 @@ class AIBISession(
                 super.onPageFinished(view, url)
                 val config = activeConfig ?: return
                 val pageUri = url?.let(Uri::parse) ?: return
-                if (originAllowed(pageUri, config.allowedScriptOrigins)) view?.let {
-                    scope.launch { ensureRuntimeInjected(it) }
+                if (originAllowed(pageUri, config.allowedScriptOrigins)) {
+                    recordDiagnostic("browser_loaded")
+                    view?.let {
+                        scope.launch { ensureRuntimeInjected(it) }
+                    }
                 }
             }
 
             override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
                 super.onReceivedError(view, request, error)
                 if (request?.isForMainFrame == true) {
+                    recordDiagnostic("browser_load_failed")
                     val sanitized = "Network error: ${error?.description ?: "Connection failed"}"
                     failWithError(sanitized)
                 }
@@ -884,7 +1090,9 @@ class AIBISession(
     private suspend fun evaluateScript(webView: WebView, script: String): String? {
         return suspendCancellableCoroutine { continuation ->
             Handler(Looper.getMainLooper()).post {
+                if (!continuation.isActive) return@post
                 webView.evaluateJavascript(script) { result ->
+                    if (!continuation.isActive) return@evaluateJavascript
                     val sanitized = if (result != null && result != "null") {
                         if (result.startsWith("\"") && result.endsWith("\"") && result.length >= 2) {
                             try {
@@ -906,6 +1114,7 @@ class AIBISession(
 
     private fun buildConfigJsonString(config: AIBIProviderConfig): String {
         return JSONObject(mapOf(
+            "id" to config.id,
             "selectors" to JSONObject(mapOf(
                 "promptInput" to config.selectors.promptInput,
                 "submitButton" to config.selectors.submitButton,

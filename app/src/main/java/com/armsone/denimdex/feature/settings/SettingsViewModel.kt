@@ -1,9 +1,12 @@
 package com.armsone.denimdex.feature.settings
 
 import android.app.Application
+import android.content.Intent
 import android.view.ViewGroup
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.armsone.denimdex.core.aibi.AIBIDiagnosticsStore
 import com.armsone.denimdex.core.aibi.AIBILoginStatusStore
 import com.armsone.denimdex.core.aibi.AIBIProviderRegistry
 import com.armsone.denimdex.core.aibi.LoginStatus
@@ -13,6 +16,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.io.File
 
 class SettingsViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -20,6 +24,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     val loginStore = AIBILoginStatusStore(application, registry)
     val repository = CollectionRepository(application)
     val userPreferences = UserPreferences(application)
+    val diagnosticsStore = AIBIDiagnosticsStore.getInstance(application)
 
     val loginStatus: StateFlow<LoginStatus> = loginStore.status
 
@@ -37,6 +42,12 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     val archiveCount: StateFlow<Int> get() = _archiveCount
     private val _archiveCount = MutableStateFlow(0)
+
+    private val _diagnosticsShareIntent = MutableStateFlow<Intent?>(null)
+    val diagnosticsShareIntent: StateFlow<Intent?> = _diagnosticsShareIntent.asStateFlow()
+
+    private val _diagnosticsMessage = MutableStateFlow<String?>(null)
+    val diagnosticsMessage: StateFlow<String?> = _diagnosticsMessage.asStateFlow()
 
     init {
         viewModelScope.launch {
@@ -114,6 +125,51 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             repository.clearAllItems()
         }
+    }
+
+    fun shareLatestDiagnostics() {
+        val latestFile = diagnosticsStore.latestExportFile
+        if (latestFile == null) {
+            val error = diagnosticsStore.storageError ?: "공유할 최근 진단 로그가 없습니다."
+            _diagnosticsMessage.value = error
+            return
+        }
+
+        try {
+            val app = getApplication<Application>()
+            val exportDir = File(app.cacheDir, "aibi_diagnostics").apply { mkdirs() }
+            exportDir.listFiles()?.forEach { it.delete() }
+
+            val exportFile = File(exportDir, latestFile.name)
+            latestFile.copyTo(exportFile, overwrite = true)
+
+            val uri = FileProvider.getUriForFile(
+                app,
+                "${app.packageName}.fileprovider",
+                exportFile
+            )
+
+            val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "application/json"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                putExtra(Intent.EXTRA_SUBJECT, "AIBI Diagnostic Log: ${latestFile.name}")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            val chooser = Intent.createChooser(sendIntent, "최근 진단 로그 공유").apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            _diagnosticsShareIntent.value = chooser
+        } catch (e: Throwable) {
+            _diagnosticsMessage.value = "진단 로그 공유 준비 실패: ${e.message ?: "알 수 없는 오류"}"
+        }
+    }
+
+    fun onDiagnosticsShareConsumed() {
+        _diagnosticsShareIntent.value = null
+    }
+
+    fun dismissDiagnosticsMessage() {
+        _diagnosticsMessage.value = null
     }
 
     override fun onCleared() {

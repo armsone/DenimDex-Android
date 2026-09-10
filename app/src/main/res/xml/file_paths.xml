@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
     <cache-path name="aibi" path="aibi/" />
+    <cache-path name="aibi_diagnostics" path="aibi_diagnostics/" />
 </paths>
