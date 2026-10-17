@@ -66,48 +66,94 @@ object AIBILoginClassifier {
         "iframe[src*='turnstile']"
     )
 
+    val OPEN_CLOSED_SIDEBAR_SELECTORS = listOf(
+        "button[data-testid='open-sidebar-button']:not([aria-expanded='true'])",
+        "button[aria-label='사이드바 보기'][aria-expanded='false']",
+        "button[aria-label='사이드바 표시/숨기기'][aria-expanded='false']",
+        "button[aria-label='Open sidebar' i][aria-expanded='false']",
+        "button[aria-label='Show sidebar' i][aria-expanded='false']"
+    )
+
     fun buildProbeScript(
         authSelectors: List<String> = AUTH_SELECTORS,
         loginSelectors: List<String> = LOGIN_SELECTORS,
-        challengeSelectors: List<String> = CHALLENGE_SELECTORS
+        challengeSelectors: List<String> = CHALLENGE_SELECTORS,
+        openSidebarSelectors: List<String> = OPEN_CLOSED_SIDEBAR_SELECTORS
     ): String {
         val authJson = authSelectors.joinToString("\", \"", "[\"", "\"]")
         val loginJson = loginSelectors.joinToString("\", \"", "[\"", "\"]")
         val challengeJson = challengeSelectors.joinToString("\", \"", "[\"", "\"]")
+        val sidebarJson = openSidebarSelectors.joinToString("\", \"", "[\"", "\"]")
         return """
             (function() {
                 function isVisible(el) {
-                    if (!el) return false;
-                    const style = window.getComputedStyle(el);
-                    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+                    if (!el || !el.isConnected) return false;
+                    let cur = el;
+                    while (cur && cur.nodeType === 1) {
+                        if (cur.hidden || cur.inert || cur.getAttribute('aria-hidden') === 'true') return false;
+                        const style = window.getComputedStyle(cur);
+                        if (!style || style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || parseFloat(style.opacity) === 0) return false;
+                        cur = cur.parentElement;
+                    }
                     const rect = el.getBoundingClientRect();
-                    return rect.width > 0 && rect.height > 0;
+                    if (rect.width <= 0 || rect.height <= 0) return false;
+                    const vw = window.innerWidth || document.documentElement.clientWidth || 0;
+                    const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+                    if (vw > 0 && (rect.right <= 0 || rect.left >= vw)) return false;
+                    if (vh > 0 && (rect.bottom <= 0 || rect.top >= vh)) return false;
+                    return true;
                 }
 
-                function hasVisible(selectors) {
+                function isEnabledAndReady(el) {
+                    if (!isVisible(el)) return false;
+                    if (el.disabled || el.getAttribute('aria-disabled') === 'true' || el.getAttribute('aria-busy') === 'true') return false;
+                    const style = window.getComputedStyle(el);
+                    if (style && style.pointerEvents === 'none') return false;
+                    return true;
+                }
+
+                function hasVisible(selectors, requireReady) {
                     for (let i = 0; i < selectors.length; i++) {
                         const elements = document.querySelectorAll(selectors[i]);
                         for (let j = 0; j < elements.length; j++) {
-                            if (isVisible(elements[j])) return true;
+                            const el = elements[j];
+                            if (requireReady ? isEnabledAndReady(el) : isVisible(el)) return true;
                         }
                     }
                     return false;
                 }
 
                 const challengeSelectors = $challengeJson;
-                if (hasVisible(challengeSelectors)) return 'CHALLENGE';
+                if (hasVisible(challengeSelectors, false)) return 'CHALLENGE';
 
                 const authSelectors = $authJson;
-                if (hasVisible(authSelectors)) return 'LOGGED_IN';
+                if (hasVisible(authSelectors, true)) return 'LOGGED_IN';
 
                 const loginSelectors = $loginJson;
-                if (hasVisible(loginSelectors)) return 'LOGIN_REQUIRED';
+                if (hasVisible(loginSelectors, false)) return 'LOGIN_REQUIRED';
 
                 // ChatGPT mobile keeps its strong account marker inside the collapsed sidebar.
-                // Reveal that existing UI once; the next bounded poll can then observe the
-                // provider-owned accounts-profile-button without reading account content.
-                const sidebar = document.querySelector("button[data-testid='open-sidebar-button']");
-                if (isVisible(sidebar)) sidebar.click();
+                // Reveal only a closed semantic sidebar once per probe; never toggle an open sidebar.
+                const openExpanded = document.querySelector(
+                    "button[aria-label='사이드바 숨기기'][aria-expanded='true'], " +
+                    "button[aria-label='사이드바 표시/숨기기'][aria-expanded='true'], " +
+                    "button[aria-label*='Close sidebar' i][aria-expanded='true'], " +
+                    "button[aria-label*='Hide sidebar' i][aria-expanded='true'], " +
+                    "button[data-testid='close-sidebar-button']"
+                );
+                if (!isVisible(openExpanded)) {
+                    const sidebarSelectors = $sidebarJson;
+                    outer: for (let i = 0; i < sidebarSelectors.length; i++) {
+                        const candidates = document.querySelectorAll(sidebarSelectors[i]);
+                        for (let j = 0; j < candidates.length; j++) {
+                            const btn = candidates[j];
+                            if (isEnabledAndReady(btn) && btn.getAttribute('aria-expanded') !== 'true') {
+                                btn.click();
+                                break outer;
+                            }
+                        }
+                    }
+                }
                 return 'UNKNOWN';
             })()
         """.trimIndent()
@@ -220,9 +266,9 @@ class AIBILoginStatusStore(
         }
 
         fun evaluateProbe() {
-            if (isDone) return
-            if (!AIBILoginClassifier.canInspectUrl(webView.url)) return
+            if (isDone || probeWebView !== webView || !AIBILoginClassifier.canInspectUrl(webView.url)) return
             webView.evaluateJavascript(probeScript) { result ->
+                if (isDone || probeWebView !== webView || !AIBILoginClassifier.canInspectUrl(webView.url)) return@evaluateJavascript
                 val parsed = AIBILoginClassifier.parseProbeResult(result)
                 if (parsed == LoginStatus.LOGGED_IN || parsed == LoginStatus.LOGIN_REQUIRED) {
                     finishWith(parsed)

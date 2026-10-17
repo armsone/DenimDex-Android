@@ -3,6 +3,7 @@ package com.armsone.denimdex.feature.scan
 import android.annotation.SuppressLint
 import android.net.Uri
 import android.os.Message
+import android.view.MotionEvent
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -21,9 +22,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.armsone.denimdex.core.aibi.AIBILoginClassifier
 import com.armsone.denimdex.core.aibi.AIBIProviderRegistry
 import com.armsone.denimdex.core.design.DenimColors
@@ -48,7 +52,7 @@ private fun isAllowedHttpsOrigin(url: Uri?, origins: List<String>): Boolean {
     }
 }
 
-@SuppressLint("SetJavaScriptEnabled")
+@SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AIBILoginSheet(
@@ -59,6 +63,7 @@ fun AIBILoginSheet(
     val isCompleted = remember { AtomicBoolean(false) }
     val rendererLossHandled = remember { AtomicBoolean(false) }
     val coroutineScope = rememberCoroutineScope()
+    val lifecycleOwner = LocalLifecycleOwner.current
     var pollingJob by remember { mutableStateOf<Job?>(null) }
     var activeWebView by remember { mutableStateOf<WebView?>(null) }
     var authChild by remember { mutableStateOf<WebView?>(null) }
@@ -81,7 +86,7 @@ fun AIBILoginSheet(
                 }
             }
         }
-        if (recheck && !isCompleted.get()) afterAuthClosed[0]?.invoke()
+        if (recheck && !isCompleted.get() && !rendererLossHandled.get()) afterAuthClosed[0]?.invoke()
     }
 
     fun stopAuthWork() {
@@ -105,6 +110,8 @@ fun AIBILoginSheet(
         }
         activeWebView?.let { web ->
             activeWebView = null
+            web.setOnTouchListener(null)
+            web.onFocusChangeListener = null
             web.webChromeClient = WebChromeClient()
             web.webViewClient = WebViewClient()
             (web.parent as? ViewGroup)?.removeView(web)
@@ -113,12 +120,21 @@ fun AIBILoginSheet(
         if (!alreadyFinished) onDismiss()
     }
 
-    DisposableEffect(Unit) {
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && !isCompleted.get() && !rendererLossHandled.get() && authChild == null) {
+                afterAuthClosed[0]?.invoke()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
             stopAuthWork()
             closeAuthChild(recheck = false)
             activeWebView?.let { web ->
                 activeWebView = null
+                web.setOnTouchListener(null)
+                web.onFocusChangeListener = null
                 web.stopLoading()
                 web.webChromeClient = WebChromeClient()
                 web.webViewClient = WebViewClient()
@@ -188,7 +204,8 @@ fun AIBILoginSheet(
             AndroidView(
                 factory = { ctx ->
                     WebView(ctx).apply {
-                        activeWebView = this
+                        val parentWeb = this
+                        activeWebView = parentWeb
                         layoutParams = ViewGroup.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.MATCH_PARENT
@@ -213,13 +230,21 @@ fun AIBILoginSheet(
                         settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                         val checkScript = AIBILoginClassifier.buildProbeScript()
 
+                        fun canInspectCurrentOrigin(candidateUrl: String? = url): Boolean {
+                            if (!AIBILoginClassifier.canInspectUrl(candidateUrl)) return false
+                            val parsed = candidateUrl?.let(Uri::parse) ?: return false
+                            return isAllowedHttpsOrigin(parsed, scriptOrigins)
+                        }
+
                         fun checkPositiveAuthentication() {
-                            if (isCompleted.get() || !AIBILoginClassifier.canInspectUrl(url)) return
+                            if (isCompleted.get() || rendererLossHandled.get() || activeWebView !== parentWeb || authChild != null || !canInspectCurrentOrigin()) return
                             evaluateJavascript(checkScript) { result ->
+                                if (isCompleted.get() || rendererLossHandled.get() || activeWebView !== parentWeb || authChild != null || !canInspectCurrentOrigin()) return@evaluateJavascript
                                 if (AIBILoginClassifier.parseProbeResult(result) == com.armsone.denimdex.core.aibi.LoginStatus.LOGGED_IN) {
                                     if (isCompleted.compareAndSet(false, true)) {
                                         pollingJob?.cancel()
                                         pollingJob = null
+                                        afterAuthClosed[0] = null
                                         isVerified = true
                                         closeAuthChild(recheck = false)
                                         CookieManager.getInstance().flush()
@@ -229,21 +254,43 @@ fun AIBILoginSheet(
                             }
                         }
 
-                        fun startHydrationPolling() {
-                            if (isCompleted.get()) return
+                        fun startHydrationPolling(windowMs: Long = 20_000L) {
+                            if (isCompleted.get() || rendererLossHandled.get() || activeWebView !== parentWeb) return
                             pollingJob?.cancel()
                             pollingJob = coroutineScope.launch {
-                                val deadline = System.currentTimeMillis() + 20_000L
-                                while (isActive && !isCompleted.get() && System.currentTimeMillis() < deadline) {
-                                    checkPositiveAuthentication()
+                                val deadline = System.currentTimeMillis() + windowMs
+                                while (isActive && !isCompleted.get() && !rendererLossHandled.get() && activeWebView === parentWeb && System.currentTimeMillis() < deadline) {
+                                    if (authChild == null && canInspectCurrentOrigin()) {
+                                        checkPositiveAuthentication()
+                                    }
                                     delay(500L)
                                 }
                             }
                         }
 
+                        fun rearmBoundedRecheck(windowMs: Long = 20_000L) {
+                            if (isCompleted.get() || rendererLossHandled.get() || activeWebView !== parentWeb || authChild != null) return
+                            if (canInspectCurrentOrigin()) {
+                                checkPositiveAuthentication()
+                            }
+                            startHydrationPolling(windowMs)
+                        }
+
                         afterAuthClosed[0] = {
-                            checkPositiveAuthentication()
-                            startHydrationPolling()
+                            rearmBoundedRecheck(20_000L)
+                        }
+
+                        setOnTouchListener { _, event ->
+                            if (event?.actionMasked == MotionEvent.ACTION_UP) {
+                                rearmBoundedRecheck(10_000L)
+                            }
+                            false
+                        }
+
+                        setOnFocusChangeListener { _, hasFocus ->
+                            if (hasFocus) {
+                                rearmBoundedRecheck(10_000L)
+                            }
                         }
 
                         webChromeClient = object : WebChromeClient() {
@@ -332,16 +379,21 @@ fun AIBILoginSheet(
                                 return true
                             }
 
+                            override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
+                                super.doUpdateVisitedHistory(view, url, isReload)
+                                if (canInspectCurrentOrigin(url)) {
+                                    rearmBoundedRecheck(20_000L)
+                                }
+                            }
+
                             override fun onPageFinished(view: WebView?, url: String?) {
                                 super.onPageFinished(view, url)
-                                if (AIBILoginClassifier.canInspectUrl(url)) {
-                                    checkPositiveAuthentication()
-                                    startHydrationPolling()
+                                if (canInspectCurrentOrigin(url)) {
+                                    rearmBoundedRecheck(20_000L)
                                 }
                             }
                         }
 
-                        val parentWeb = this
                         post {
                             if (activeWebView === parentWeb && !isCompleted.get() && authChild == null) {
                                 parentWeb.requestFocus()
