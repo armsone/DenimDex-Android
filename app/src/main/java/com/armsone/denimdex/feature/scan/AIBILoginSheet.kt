@@ -1,6 +1,12 @@
 package com.armsone.denimdex.feature.scan
 
 import android.annotation.SuppressLint
+import android.net.Uri
+import android.os.Message
+import android.webkit.RenderProcessGoneDetail
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.view.ViewGroup
 import android.webkit.CookieManager
@@ -19,13 +25,28 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.armsone.denimdex.core.aibi.AIBILoginClassifier
+import com.armsone.denimdex.core.aibi.AIBIProviderRegistry
 import com.armsone.denimdex.core.design.DenimColors
 import com.armsone.denimdex.core.design.DenimTypography
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.io.ByteArrayInputStream
 import java.util.concurrent.atomic.AtomicBoolean
+
+private fun effectivePort(uri: Uri): Int =
+    if (uri.port != -1) uri.port else if (uri.scheme.equals("https", ignoreCase = true)) 443 else -1
+
+private fun isAllowedHttpsOrigin(url: Uri?, origins: List<String>): Boolean {
+    if (url == null || !url.scheme.equals("https", ignoreCase = true) || url.host.isNullOrEmpty()) return false
+    return origins.any { candidate ->
+        val allowed = Uri.parse(candidate)
+        allowed.scheme.equals("https", ignoreCase = true) &&
+            url.host.equals(allowed.host, ignoreCase = true) &&
+            effectivePort(url) == effectivePort(allowed)
+    }
+}
 
 @SuppressLint("SetJavaScriptEnabled")
 @OptIn(ExperimentalMaterial3Api::class)
@@ -36,20 +57,74 @@ fun AIBILoginSheet(
 ) {
     var isVerified by remember { mutableStateOf(false) }
     val isCompleted = remember { AtomicBoolean(false) }
+    val rendererLossHandled = remember { AtomicBoolean(false) }
     val coroutineScope = rememberCoroutineScope()
     var pollingJob by remember { mutableStateOf<Job?>(null) }
     var activeWebView by remember { mutableStateOf<WebView?>(null) }
+    var authChild by remember { mutableStateOf<WebView?>(null) }
+    var authHost by remember { mutableStateOf<String?>(null) }
+    val afterAuthClosed = remember { arrayOfNulls<() -> Unit>(1) }
+
+    fun closeAuthChild(recheck: Boolean) {
+        val child = authChild ?: return
+        authChild = null
+        authHost = null
+        child.stopLoading()
+        child.webChromeClient = WebChromeClient()
+        child.webViewClient = WebViewClient()
+        (child.parent as? ViewGroup)?.removeView(child)
+        child.destroy()
+        activeWebView?.let { parent ->
+            parent.post {
+                if (activeWebView === parent && !isCompleted.get() && !rendererLossHandled.get() && authChild == null) {
+                    parent.requestFocus()
+                }
+            }
+        }
+        if (recheck && !isCompleted.get()) afterAuthClosed[0]?.invoke()
+    }
+
+    fun stopAuthWork() {
+        isCompleted.set(true)
+        pollingJob?.cancel()
+        pollingJob = null
+        afterAuthClosed[0] = null
+    }
+
+    fun shutdownAfterRendererLoss() {
+        if (!rendererLossHandled.compareAndSet(false, true)) return
+        val alreadyFinished = isCompleted.get()
+        stopAuthWork()
+        authChild?.let { child ->
+            authChild = null
+            authHost = null
+            child.webChromeClient = WebChromeClient()
+            child.webViewClient = WebViewClient()
+            (child.parent as? ViewGroup)?.removeView(child)
+            child.destroy()
+        }
+        activeWebView?.let { web ->
+            activeWebView = null
+            web.webChromeClient = WebChromeClient()
+            web.webViewClient = WebViewClient()
+            (web.parent as? ViewGroup)?.removeView(web)
+            web.destroy()
+        }
+        if (!alreadyFinished) onDismiss()
+    }
 
     DisposableEffect(Unit) {
         onDispose {
-            pollingJob?.cancel()
-            pollingJob = null
-            activeWebView?.apply {
-                stopLoading()
-                webViewClient = WebViewClient()
-                destroy()
+            stopAuthWork()
+            closeAuthChild(recheck = false)
+            activeWebView?.let { web ->
+                activeWebView = null
+                web.stopLoading()
+                web.webChromeClient = WebChromeClient()
+                web.webViewClient = WebViewClient()
+                (web.parent as? ViewGroup)?.removeView(web)
+                web.destroy()
             }
-            activeWebView = null
         }
     }
 
@@ -76,8 +151,8 @@ fun AIBILoginSheet(
                 )
 
                 TextButton(onClick = {
-                    pollingJob?.cancel()
-                    pollingJob = null
+                    stopAuthWork()
+                    closeAuthChild(recheck = false)
                     onDismiss()
                 }) {
                     Text(
@@ -108,6 +183,7 @@ fun AIBILoginSheet(
                 )
             }
 
+            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
             // Browser WebView
             AndroidView(
                 factory = { ctx ->
@@ -124,8 +200,14 @@ fun AIBILoginSheet(
                         settings.loadWithOverviewMode = true
                         settings.setSupportMultipleWindows(true)
 
+                        isFocusable = true
+                        isFocusableInTouchMode = true
+
                         val cookieManager = CookieManager.getInstance()
                         cookieManager.setAcceptCookie(true)
+                        val providerConfig = AIBIProviderRegistry(ctx.applicationContext).getProviderConfig()
+                        val scriptOrigins = providerConfig.allowedScriptOrigins
+                        val authOrigins = providerConfig.allowedAuthOrigins
 
                         cookieManager.setAcceptThirdPartyCookies(this, true)
                         settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
@@ -139,6 +221,7 @@ fun AIBILoginSheet(
                                         pollingJob?.cancel()
                                         pollingJob = null
                                         isVerified = true
+                                        closeAuthChild(recheck = false)
                                         CookieManager.getInstance().flush()
                                         onLoginSuccess()
                                     }
@@ -158,7 +241,97 @@ fun AIBILoginSheet(
                             }
                         }
 
+                        afterAuthClosed[0] = {
+                            checkPositiveAuthentication()
+                            startHydrationPolling()
+                        }
+
+                        webChromeClient = object : WebChromeClient() {
+                            override fun onCreateWindow(
+                                view: WebView?,
+                                isDialog: Boolean,
+                                isUserGesture: Boolean,
+                                resultMsg: Message?
+                            ): Boolean {
+                                if (!isUserGesture || view !== this@apply || authChild != null || isCompleted.get()) return false
+                                val transport = resultMsg?.obj as? WebView.WebViewTransport ?: return false
+                                val child = WebView(ctx).apply {
+                                    layoutParams = ViewGroup.LayoutParams(
+                                        ViewGroup.LayoutParams.MATCH_PARENT,
+                                        ViewGroup.LayoutParams.MATCH_PARENT
+                                    )
+                                    isFocusable = true
+                                    isFocusableInTouchMode = true
+                                    settings.javaScriptEnabled = true
+                                    settings.domStorageEnabled = true
+                                    settings.setSupportMultipleWindows(false)
+                                    settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                                    webChromeClient = object : WebChromeClient() {
+                                        override fun onCreateWindow(
+                                            view: WebView?,
+                                            isDialog: Boolean,
+                                            isUserGesture: Boolean,
+                                            resultMsg: Message?
+                                        ): Boolean = false
+
+                                        override fun onCloseWindow(window: WebView?) {
+                                            if (window === authChild) closeAuthChild(recheck = true)
+                                        }
+                                    }
+                                    webViewClient = object : WebViewClient() {
+                                        private fun permitted(u: Uri?): Boolean =
+                                            isAllowedHttpsOrigin(u, scriptOrigins) || isAllowedHttpsOrigin(u, authOrigins)
+
+                                        override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                                            val u = request?.url ?: return true
+                                            if (u.toString() == "about:blank") return false
+                                            return !permitted(u)
+                                        }
+
+                                        override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+                                            val req = request ?: return null
+                                            if (!req.isForMainFrame || req.url.toString() == "about:blank" || permitted(req.url)) return null
+                                            return WebResourceResponse(
+                                                "text/plain", "UTF-8", 403, "Forbidden",
+                                                emptyMap(), ByteArrayInputStream(ByteArray(0))
+                                            )
+                                        }
+
+                                        override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                                            val u = url?.let(Uri::parse)
+                                            if (u?.toString() == "about:blank") return
+                                            if (view === authChild && !permitted(u)) {
+                                                closeAuthChild(recheck = true)
+                                            } else if (view === authChild) {
+                                                authHost = u?.host
+                                            }
+                                        }
+
+                                        override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
+                                            shutdownAfterRendererLoss()
+                                            return true
+                                        }
+                                    }
+                                }
+                                authChild = child
+                                transport.webView = child
+                                resultMsg.sendToTarget()
+                                return true
+                            }
+                        }
+
                         webViewClient = object : WebViewClient() {
+                            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                                val u = request?.url ?: return true
+                                return !(isAllowedHttpsOrigin(u, scriptOrigins) || isAllowedHttpsOrigin(u, authOrigins))
+                            }
+
+                            override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
+                                shutdownAfterRendererLoss()
+                                return true
+                            }
+
                             override fun onPageFinished(view: WebView?, url: String?) {
                                 super.onPageFinished(view, url)
                                 if (AIBILoginClassifier.canInspectUrl(url)) {
@@ -168,13 +341,58 @@ fun AIBILoginSheet(
                             }
                         }
 
+                        val parentWeb = this
+                        post {
+                            if (activeWebView === parentWeb && !isCompleted.get() && authChild == null) {
+                                parentWeb.requestFocus()
+                            }
+                        }
+
                         loadUrl("https://chatgpt.com/")
                     }
                 },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
+                modifier = Modifier.fillMaxSize()
             )
+
+            authChild?.let { child ->
+                Column(modifier = Modifier.fillMaxSize().background(DenimColors.canvas)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "인증 창: ${authHost ?: "확인 중"}",
+                            style = DenimTypography.caption.copy(color = DenimColors.inkSoft),
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = { closeAuthChild(recheck = true) }) {
+                            Text(
+                                text = "인증 창 닫기",
+                                style = DenimTypography.subheadline.copy(
+                                    color = DenimColors.indigoBright,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            )
+                        }
+                    }
+                    key(child) {
+                        AndroidView(
+                            factory = {
+                                child.also { mounted ->
+                                    mounted.post {
+                                        if (authChild === mounted && !isCompleted.get()) mounted.requestFocus()
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth().weight(1f)
+                        )
+                    }
+                }
+            }
+            }
         }
     }
 }
